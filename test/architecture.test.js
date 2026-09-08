@@ -18,6 +18,14 @@ test("browser bundle never receives permanent Cloudflare secrets", async () => {
   assert.doesNotMatch(app, /CF_REALTIME_APP_SECRET|TURN_KEY_API_TOKEN|ADMIN_PASSWORD|APP_AUTH_SECRET/);
 });
 
+test("chat history has a fixed panel and its own scrollbar", async () => {
+  const [styles, app] = await Promise.all([read("public/styles.css"), read("public/app.js")]);
+  assert.match(styles, /\.chat-panel\{height:\d+px;min-height:0;[^}]*overflow:hidden/);
+  assert.match(styles, /\.chat-log\{min-height:0;[^}]*overflow-y:auto/);
+  assert.match(styles, /\.chat-log::-webkit-scrollbar/);
+  assert.match(app, /ui\.chatLog\.scrollTop = ui\.chatLog\.scrollHeight/);
+});
+
 test("server enforces invitations and host publishing", async () => {
   const [worker, room] = await Promise.all([read("src/index.js"), read("src/room.js")]);
   assert.match(worker, /valid invitation is required/i);
