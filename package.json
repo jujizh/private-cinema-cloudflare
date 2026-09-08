@@ -1,0 +1,13 @@
+{
+  "name": "jiahao-private-cinema-cloudflare",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Workers + Durable Objects version of Jiahao Private Cinema",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.30.0"
+  }
+}

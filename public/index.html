@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#08090c">
+  <title>Jiahao Private Cinema</title>
+  <style>
+    *{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;background:#07080b;color:#f7f7f8;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+    body{overflow-x:hidden}
+    .ambient{position:fixed;inset:-25vh -20vw;pointer-events:none;background:
+      radial-gradient(circle at 18% 16%,rgba(115,65,255,.22),transparent 28%),
+      radial-gradient(circle at 82% 24%,rgba(255,55,127,.15),transparent 30%),
+      radial-gradient(circle at 52% 88%,rgba(0,196,255,.11),transparent 28%);filter:blur(28px)}
+    .shell{position:relative;max-width:1420px;margin:auto;padding:18px}
+    .topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:15px}
+    .brand{display:flex;align-items:center;gap:11px}.logo{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;font-size:22px;background:linear-gradient(135deg,#7c3aed,#db2777);box-shadow:0 12px 36px rgba(124,58,237,.25)}
+    .title{font-weight:800;font-size:19px;letter-spacing:-.02em}.sub{font-size:12px;color:#92929b}
+    .pill{display:flex;gap:8px;align-items:center;padding:8px 11px;border:1px solid #292a30;background:rgba(16,17,21,.7);border-radius:999px;font-size:12px;color:#d4d4d8}
+    .dot{width:8px;height:8px;border-radius:50%;background:#56565f}.dot.live{background:#34d399;box-shadow:0 0 14px rgba(52,211,153,.65)}
+    .layout{display:grid;grid-template-columns:minmax(0,1fr) 345px;gap:14px}
+    .card{border:1px solid #23242a;background:rgba(13,14,18,.83);backdrop-filter:blur(16px);border-radius:22px;box-shadow:0 18px 60px rgba(0,0,0,.36)}
+    .stageCard{overflow:hidden}.stage{position:relative;aspect-ratio:16/9;background:#020203;display:grid;place-items:center;overflow:hidden}
+    video{width:100%;height:100%;object-fit:contain;background:#000;display:none}
+    .empty{text-align:center;max-width:520px;padding:28px;color:#9b9ba4}.empty .icon{font-size:52px}.empty h2{color:#fafafa;margin:8px 0 7px}.empty p{line-height:1.6;font-size:14px;margin:0}
+    .badge{position:absolute;left:14px;top:14px;display:none;gap:7px;align-items:center;padding:7px 10px;border:1px solid rgba(255,255,255,.09);border-radius:999px;background:rgba(7,8,11,.68);backdrop-filter:blur(12px);font-size:12px}
+    .pulse{width:7px;height:7px;border-radius:50%;background:#ef4444;box-shadow:0 0 0 5px rgba(239,68,68,.13)}
+    .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:13px;border-top:1px solid #202127}
+    button,input{font:inherit}button{border:1px solid #303139;color:#f7f7f8;background:#191a20;border-radius:12px;padding:9px 12px;cursor:pointer;transition:.15s}
+    button:hover{transform:translateY(-1px);background:#22232b}button.primary{background:linear-gradient(135deg,#7339eb,#d62a78);border-color:transparent}button.danger{background:#281519;border-color:#532129;color:#fecdd3}
+    button:disabled{opacity:.45;cursor:not-allowed;transform:none}
+    .side{display:flex;flex-direction:column;gap:14px}.sideCard{padding:14px}.sideCard h3{margin:0 0 11px;font-size:14px}
+    .grid{display:grid;gap:9px}input{width:100%;background:#101116;border:1px solid #2d2e35;color:#fff;border-radius:12px;padding:10px 11px;outline:none}input:focus{border-color:#7157d8;box-shadow:0 0 0 3px rgba(113,87,216,.12)}
+    .seg{display:grid;grid-template-columns:1fr 1fr;gap:7px}.seg button.active{background:#2d2547;border-color:#6654b8}
+    .hint{font-size:12px;line-height:1.5;color:#8d8e97}.linkbox{display:flex;gap:7px}.linkbox input{font-size:11px;color:#c5c5cc}
+    .chat{min-height:365px;display:flex;flex-direction:column}.log{flex:1;min-height:250px;max-height:420px;overflow:auto;padding-right:4px}.msg{margin:8px 0}.meta{font-size:11px;color:#777881;margin-bottom:3px}.bubble{display:inline-block;max-width:88%;padding:8px 10px;background:#191a20;border:1px solid #292a31;border-radius:12px;font-size:13px}.msg.me{text-align:right}.msg.me .bubble{background:#2a2145;border-color:#413466}
+    .chatInput{display:flex;gap:7px;margin-top:8px}.chatInput input{flex:1}.reactions{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}.reactions button{font-size:18px;padding:7px 9px}
+    .sys{text-align:center;color:#777881;font-size:12px;margin:8px 0}.float{position:absolute;left:50%;bottom:8%;transform:translateX(-50%);font-size:54px;animation:up 1.4s ease-out forwards;z-index:10;pointer-events:none}
+    @keyframes up{0%{opacity:0;transform:translate(-50%,20px) scale(.7)}20%{opacity:1}100%{opacity:0;transform:translate(-50%,-135px) scale(1.16)}}
+    .footer{text-align:center;color:#666772;font-size:11px;margin-top:13px}
+    @media(max-width:940px){.layout{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<div class="ambient"></div>
+<div class="shell">
+  <div class="topbar">
+    <div class="brand"><div class="logo">🎬</div><div><div class="title">Jiahao Private Cinema</div><div class="sub">Private movie nights, powered by Cloudflare + WebRTC</div></div></div>
+    <div class="pill"><span id="dot" class="dot"></span><span id="status">Offline</span></div>
+  </div>
+
+  <div class="layout">
+    <div class="card stageCard">
+      <div id="stage" class="stage">
+        <video id="remoteVideo" autoplay playsinline controls></video>
+        <video id="previewVideo" autoplay muted playsinline controls></video>
+        <div id="empty" class="empty"><div class="icon">🍿</div><h2>Private screening room</h2><p>Host shares a video tab/window/screen.<br>Viewer only needs this room link.</p></div>
+        <div id="badge" class="badge"><span class="pulse"></span> LIVE • WebRTC</div>
+      </div>
+      <div class="controls">
+        <button id="share" class="primary" disabled>🎥 Start sharing</button>
+        <button id="stop" class="danger" disabled>■ Stop</button>
+        <button id="full">⛶ Fullscreen</button>
+        <button id="copy">🔗 Copy viewer link</button>
+        <span id="people" class="hint" style="margin-left:auto">0 people</span>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="card sideCard">
+        <h3>Room</h3>
+        <div class="grid">
+          <input id="room" placeholder="Room code">
+          <input id="name" placeholder="Your name">
+          <div class="seg"><button id="host" class="active">I'm hosting</button><button id="viewer">I'm watching</button></div>
+          <button id="join" class="primary">Enter room</button>
+          <div id="hint" class="hint">Not connected yet.</div>
+          <div class="linkbox"><input id="link" readonly></div>
+          <div class="hint">Best audio: play the MP4 in Chrome/Edge, share that tab, and enable <b>Share tab audio</b>.</div>
+        </div>
+      </div>
+
+      <div class="card sideCard chat">
+        <h3>Chat</h3>
+        <div id="log" class="log"></div>
+        <div class="chatInput"><input id="chat" placeholder="Say something…"><button id="send">Send</button></div>
+        <div class="reactions">
+          <button data-e="❤️">❤️</button><button data-e="😂">😂</button><button data-e="😮">😮</button>
+          <button data-e="🥹">🥹</button><button data-e="👏">👏</button><button data-e="🔥">🔥</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="footer">No DRM bypass. Media is direct WebRTC when possible; Cloudflare TURN can be enabled as a relay fallback.</div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const room=$("room"),name=$("name"),host=$("host"),viewer=$("viewer"),join=$("join"),share=$("share"),stop=$("stop"),
+full=$("full"),copy=$("copy"),link=$("link"),hint=$("hint"),dot=$("dot"),status=$("status"),people=$("people"),
+remote=$("remoteVideo"),preview=$("previewVideo"),empty=$("empty"),badge=$("badge"),stage=$("stage"),log=$("log"),chat=$("chat"),send=$("send");
+
+let role="host",joined=false,ws=null,myId=null,peerId=null,pc=null,localStream=null,iceServers=[{urls:["stun:stun.cloudflare.com:3478"]}];
+
+const qs=new URLSearchParams(location.search);
+room.value=qs.get("room")||("cinema-"+Math.random().toString(36).slice(2,8));
+if(qs.get("role")==="viewer")setRole("viewer");
+refreshLink();
+
+function setRole(r){role=r;host.classList.toggle("active",r==="host");viewer.classList.toggle("active",r==="viewer");share.style.display=r==="host"?"":"none";stop.style.display=r==="host"?"":"none";refreshLink()}
+host.onclick=()=>setRole("host");viewer.onclick=()=>setRole("viewer");room.oninput=refreshLink;
+function refreshLink(){link.value=`${location.origin}${location.pathname}?room=${encodeURIComponent(room.value.trim()||"private")}&role=viewer`}
+copy.onclick=async()=>{refreshLink();await navigator.clipboard.writeText(link.value);copy.textContent="✓ Copied";setTimeout(()=>copy.textContent="🔗 Copy viewer link",1300)};
+
+async function loadIceServers(){
+  try{
+    const r=await fetch("/api/turn",{cache:"no-store"});
+    const j=await r.json();
+    if(Array.isArray(j.iceServers)&&j.iceServers.length)iceServers=j.iceServers;
+    if(j.enabled)sys("Cloudflare TURN fallback is enabled.");
+  }catch{}
+}
+
+join.onclick=async()=>{
+  const r=room.value.trim(); if(!r)return alert("Enter a room code.");
+  await loadIceServers();
+  const n=name.value.trim()||(role==="host"?"Jiahao":"Guest");
+  const proto=location.protocol==="https:"?"wss":"ws";
+  ws=new WebSocket(`${proto}://${location.host}/ws?room=${encodeURIComponent(r)}&name=${encodeURIComponent(n)}&role=${role}`);
+  ws.onopen=()=>{joined=true;join.disabled=true;room.disabled=true;name.disabled=true;host.disabled=true;viewer.disabled=true;dot.classList.add("live");status.textContent=`Room: ${r}`;hint.textContent=role==="host"?"Connected. Start sharing when ready.":"Connected. Waiting for host…";if(role==="host")share.disabled=false;sys(`You entered as ${role}.`)};
+  ws.onmessage=e=>handle(JSON.parse(e.data));
+  ws.onclose=()=>{dot.classList.remove("live");status.textContent="Disconnected";hint.textContent="Connection closed."};
+};
+
+function sendWs(obj){if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify(obj))}
+async function handle(m){
+  if(m.type==="welcome"){myId=m.id;for(const p of (m.peers||[])){if(role==="host"&&p.role==="viewer"){peerId=p.id;if(localStream)await offer(p.id)}}return}
+  if(m.type==="peer:joined"){sys(`${m.peer.name} joined as ${m.peer.role}.`);if(role==="host"&&m.peer.role==="viewer"){peerId=m.peer.id;if(localStream)await offer(peerId);else hint.textContent=`${m.peer.name} is here. Click Start sharing.`}return}
+  if(m.type==="peer:left"){sys(`${m.peer.name} left.`);if(m.peer.id===peerId){peerId=null;if(pc)pc.close();pc=null;if(role==="viewer"){remote.srcObject=null;remote.style.display="none";empty.style.display="";badge.style.display="none"}}return}
+  if(m.type==="room:count"){people.textContent=`${m.count} ${m.count===1?"person":"people"}`;return}
+  if(m.type==="signal"){await onSignal(m.from,m.data);return}
+  if(m.type==="chat"){addMsg(m.from===myId,m.name,m.text,m.at);return}
+  if(m.type==="reaction"){showReaction(m.emoji);return}
+  if(m.type==="host:status"&&!m.sharing&&role==="viewer"){remote.srcObject=null;remote.style.display="none";empty.style.display="";badge.style.display="none";hint.textContent="Host stopped sharing."}
+}
+
+function createPc(target){
+  if(pc)try{pc.close()}catch{}
+  peerId=target;pc=new RTCPeerConnection({iceServers});
+  pc.onicecandidate=e=>{if(e.candidate&&peerId)sendWs({type:"signal",to:peerId,data:{candidate:e.candidate}})};
+  pc.onconnectionstatechange=()=>{if(pc.connectionState==="connected")hint.textContent="Video stream connected.";if(pc.connectionState==="failed")hint.textContent="P2P failed. Enable Cloudflare TURN for restrictive networks."};
+  pc.ontrack=e=>{if(role!=="viewer")return;remote.srcObject=e.streams[0];remote.style.display="block";empty.style.display="none";badge.style.display="flex";remote.play().catch(()=>{})};
+  if(role==="host"&&localStream)for(const t of localStream.getTracks())pc.addTrack(t,localStream);
+  return pc;
+}
+async function offer(target){const p=createPc(target);const o=await p.createOffer();await p.setLocalDescription(o);sendWs({type:"signal",to:target,data:{description:p.localDescription}})}
+async function onSignal(from,data){
+  try{
+    if(data.description){
+      if(!pc||peerId!==from)createPc(from);
+      await pc.setRemoteDescription(data.description);
+      if(data.description.type==="offer"){const a=await pc.createAnswer();await pc.setLocalDescription(a);sendWs({type:"signal",to:from,data:{description:pc.localDescription}})}
+    }else if(data.candidate){
+      if(!pc||peerId!==from)createPc(from);
+      await pc.addIceCandidate(data.candidate);
+    }
+  }catch(e){console.error(e);hint.textContent="WebRTC signaling error."}
+}
+
+share.onclick=async()=>{
+  try{
+    localStream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:30},audio:true});
+    preview.srcObject=localStream;preview.style.display="block";empty.style.display="none";badge.style.display="flex";share.disabled=true;stop.disabled=false;hint.textContent="Sharing now.";
+    localStream.getVideoTracks()[0].addEventListener("ended",stopSharing);
+    sendWs({type:"host:status",sharing:true});
+    if(peerId)await offer(peerId);
+  }catch(e){hint.textContent="Sharing was cancelled or blocked."}
+};
+function stopSharing(){if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}preview.srcObject=null;preview.style.display="none";badge.style.display="none";empty.style.display="";share.disabled=!joined;stop.disabled=true;sendWs({type:"host:status",sharing:false});if(pc)pc.close();pc=null}
+stop.onclick=stopSharing;full.onclick=()=>stage.requestFullscreen?.();
+
+function sendChat(){const t=chat.value.trim();if(!t)return;sendWs({type:"chat",text:t});chat.value=""}
+send.onclick=sendChat;chat.addEventListener("keydown",e=>{if(e.key==="Enter")sendChat()});
+document.querySelectorAll("[data-e]").forEach(b=>b.onclick=()=>{sendWs({type:"reaction",emoji:b.dataset.e});showReaction(b.dataset.e)});
+function addMsg(me,n,t,at){const d=document.createElement("div");d.className="msg"+(me?" me":"");d.innerHTML=`<div class="meta"></div><div class="bubble"></div>`;d.querySelector(".meta").textContent=`${n} • ${new Date(at).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}`;d.querySelector(".bubble").textContent=t;log.appendChild(d);log.scrollTop=log.scrollHeight}
+function sys(t){const d=document.createElement("div");d.className="sys";d.textContent=t;log.appendChild(d);log.scrollTop=log.scrollHeight}
+function showReaction(e){const d=document.createElement("div");d.className="float";d.textContent=e;stage.appendChild(d);setTimeout(()=>d.remove(),1500)}
+</script>
+</body>
+</html>
