@@ -101,7 +101,9 @@ const room=$("room"),name=$("name"),host=$("host"),viewer=$("viewer"),join=$("jo
 full=$("full"),copy=$("copy"),link=$("link"),hint=$("hint"),dot=$("dot"),status=$("status"),people=$("people"),
 remote=$("remoteVideo"),preview=$("previewVideo"),empty=$("empty"),badge=$("badge"),stage=$("stage"),log=$("log"),chat=$("chat"),send=$("send");
 
-let role="host",joined=false,ws=null,myId=null,peerId=null,pc=null,localStream=null,iceServers=[{urls:["stun:stun.cloudflare.com:3478"]}];
+let role="host",joined=false,connecting=false,ws=null,myId=null,peerId=null,pc=null,localStream=null,iceServers=[{urls:["stun:stun.cloudflare.com:3478"]}];
+const clientId = crypto.randomUUID(); // one identity for this page load
+const seenEvents = new Set();
 
 const qs=new URLSearchParams(location.search);
 room.value=qs.get("room")||("cinema-"+Math.random().toString(36).slice(2,8));
@@ -123,14 +125,52 @@ async function loadIceServers(){
 }
 
 join.onclick=async()=>{
+  if (joined || connecting) return;
   const r=room.value.trim(); if(!r)return alert("Enter a room code.");
-  await loadIceServers();
-  const n=name.value.trim()||(role==="host"?"Jiahao":"Guest");
-  const proto=location.protocol==="https:"?"wss":"ws";
-  ws=new WebSocket(`${proto}://${location.host}/ws?room=${encodeURIComponent(r)}&name=${encodeURIComponent(n)}&role=${role}`);
-  ws.onopen=()=>{joined=true;join.disabled=true;room.disabled=true;name.disabled=true;host.disabled=true;viewer.disabled=true;dot.classList.add("live");status.textContent=`Room: ${r}`;hint.textContent=role==="host"?"Connected. Start sharing when ready.":"Connected. Waiting for host…";if(role==="host")share.disabled=false;sys(`You entered as ${role}.`)};
-  ws.onmessage=e=>handle(JSON.parse(e.data));
-  ws.onclose=()=>{dot.classList.remove("live");status.textContent="Disconnected";hint.textContent="Connection closed."};
+
+  // Lock the button immediately. Previously it was disabled only after WebSocket
+  // opened, so a double-click on a slow connection could create duplicate sessions.
+  connecting=true; join.disabled=true; join.textContent="Connecting…";
+  try {
+    await loadIceServers();
+    const n=name.value.trim()||(role==="host"?"Jiahao":"Guest");
+    const proto=location.protocol==="https:"?"wss":"ws";
+
+    if (ws && (ws.readyState===WebSocket.OPEN || ws.readyState===WebSocket.CONNECTING)) {
+      try { ws.close(4000,"Replacing stale connection"); } catch {}
+    }
+
+    const thisWs = new WebSocket(`${proto}://${location.host}/ws?room=${encodeURIComponent(r)}&name=${encodeURIComponent(n)}&role=${role}&clientId=${encodeURIComponent(clientId)}`);
+    ws=thisWs;
+
+    thisWs.onopen=()=>{
+      if (ws!==thisWs) return;
+      connecting=false; joined=true; join.disabled=true; join.textContent="Connected";
+      room.disabled=true;name.disabled=true;host.disabled=true;viewer.disabled=true;dot.classList.add("live");
+      status.textContent=`Room: ${r}`;hint.textContent=role==="host"?"Connected. Start sharing when ready.":"Connected. Waiting for host…";
+      if(role==="host")share.disabled=false;sys(`You entered as ${role}.`);
+    };
+    thisWs.onmessage=e=>{
+      let m; try { m=JSON.parse(e.data); } catch { return; }
+      if (m.eventId) {
+        if (seenEvents.has(m.eventId)) return;
+        seenEvents.add(m.eventId);
+        if (seenEvents.size > 300) seenEvents.delete(seenEvents.values().next().value);
+      }
+      handle(m);
+    };
+    thisWs.onclose=()=>{
+      if (ws!==thisWs) return; // ignore stale socket closing
+      connecting=false; joined=false; join.disabled=false; join.textContent="Enter room";
+      dot.classList.remove("live");status.textContent="Disconnected";hint.textContent="Connection closed.";
+    };
+    thisWs.onerror=()=>{
+      if (ws!==thisWs) return;
+      connecting=false; join.disabled=false; join.textContent="Enter room"; hint.textContent="Connection failed. Try again.";
+    };
+  } catch (e) {
+    connecting=false; join.disabled=false; join.textContent="Enter room"; hint.textContent="Could not connect.";
+  }
 };
 
 function sendWs(obj){if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify(obj))}

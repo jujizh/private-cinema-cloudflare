@@ -12,7 +12,18 @@ export class CinemaRoom {
     const url = new URL(request.url);
     const name = (url.searchParams.get("name") || "Guest").slice(0, 40);
     const role = url.searchParams.get("role") === "host" ? "host" : "viewer";
+    const clientId = (url.searchParams.get("clientId") || crypto.randomUUID()).slice(0, 100);
     const id = crypto.randomUUID();
+
+    // If the same page accidentally opens more than one socket (double click / slow network),
+    // replace the older socket instead of treating it as another person.
+    for (const old of this.ctx.getWebSockets()) {
+      let oldMeta = null;
+      try { oldMeta = old.deserializeAttachment(); } catch {}
+      if (oldMeta?.clientId === clientId) {
+        try { old.close(4000, "Replaced by newer connection"); } catch {}
+      }
+    }
 
     const pair = new WebSocketPair();
     const client = pair[0];
@@ -22,7 +33,7 @@ export class CinemaRoom {
       try { return ws.deserializeAttachment(); } catch { return null; }
     }).filter(Boolean);
 
-    server.serializeAttachment({ id, name, role });
+    server.serializeAttachment({ id, name, role, clientId });
     this.ctx.acceptWebSocket(server);
 
     server.send(JSON.stringify({
@@ -33,6 +44,7 @@ export class CinemaRoom {
 
     this.broadcast({
       type: "peer:joined",
+      eventId: crypto.randomUUID(),
       peer: { id, name, role }
     }, id);
 
@@ -76,6 +88,7 @@ export class CinemaRoom {
       if (!text) return;
       this.broadcast({
         type: "chat",
+        eventId: crypto.randomUUID(),
         from: meta.id,
         name: meta.name,
         text,
@@ -89,6 +102,7 @@ export class CinemaRoom {
       if (!allowed.has(data.emoji)) return;
       this.broadcast({
         type: "reaction",
+        eventId: crypto.randomUUID(),
         from: meta.id,
         emoji: data.emoji
       }, meta.id);
@@ -108,10 +122,24 @@ export class CinemaRoom {
     try { meta = ws.deserializeAttachment(); } catch { meta = null; }
 
     if (meta) {
-      this.broadcast({
-        type: "peer:left",
-        peer: meta
-      }, meta.id);
+      // Do not show a fake "left" if this socket was merely replaced by a newer
+      // connection from the same page/client.
+      let replacementExists = false;
+      for (const other of this.ctx.getWebSockets()) {
+        let om = null;
+        try { om = other.deserializeAttachment(); } catch {}
+        if (om?.clientId === meta.clientId && om?.id !== meta.id) {
+          replacementExists = true;
+          break;
+        }
+      }
+      if (!replacementExists) {
+        this.broadcast({
+          type: "peer:left",
+          eventId: crypto.randomUUID(),
+          peer: meta
+        }, meta.id);
+      }
     }
     this.broadcastCount();
   }
