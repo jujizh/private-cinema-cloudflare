@@ -128,7 +128,7 @@ async function routeApi(request, env) {
 
   if (url.pathname === "/api/config" && request.method === "GET") {
     return jsonResponse({
-      version: "2.0.3",
+      version: "2.1.0",
       realtimeConfigured: realtimeConfigured(env),
       turnConfigured: Boolean(env.TURN_KEY_ID && env.TURN_KEY_API_TOKEN),
       ownerConfigured: Boolean(env.ADMIN_PASSWORD && env.APP_AUTH_SECRET?.length >= 32),

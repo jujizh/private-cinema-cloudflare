@@ -68,6 +68,24 @@ No permanent credential belongs in the repository. Put every secret in Cloudflar
 
 See [SECURITY.md](SECURITY.md) for the trust model and [TESTING.md](TESTING.md) for the pre-release checklist.
 
+## v2.1.0 hybrid media routing
+
+- With exactly one viewer, the cinema now establishes a direct WebRTC P2P fast
+  path while keeping the Cloudflare SFU stream available as a fallback.
+- If direct ICE succeeds, the viewer automatically leaves the SFU download and
+  the Network panel changes to **Direct P2P**.
+- If P2P fails, the existing SFU playback continues without interrupting the
+  screening. TURN candidates remain available for restrictive NATs and
+  firewalls.
+- When a second viewer enters, direct mode closes and every viewer uses the SFU
+  so Host upload does not grow once per audience member.
+- Selected-candidate detection now also uses WebRTC transport stats, which fixes
+  `UNKNOWN` route/transport reporting in WebKit-based iPhone browsers.
+
+This mirrors the practical two-person/group split used by mature watch-party
+products: direct media for two devices, relayed media for groups. The website,
+authentication, room state and signaling still run on Cloudflare in both modes.
+
 ## v2.0.3 mobile playback update
 
 - Best quality and Balanced are adaptive preferences. They can step down when a

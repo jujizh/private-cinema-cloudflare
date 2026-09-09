@@ -52,6 +52,19 @@ test("diagnostics report interval loss and the largest active simulcast layer", 
   assert.match(app, /visibilityState !== "visible"[\s\S]*previousRtp\.clear/);
 });
 
+test("one viewer gets a direct P2P fast path with SFU fallback", async () => {
+  const [app, room] = await Promise.all([read("public/app.js"), read("src/room.js")]);
+  assert.match(app, /function reconcileDirectRoute/);
+  assert.match(app, /directViewerIds\(\)\.length !== 1/);
+  assert.match(app, /Direct P2P/);
+  assert.match(app, /P2P via TURN/);
+  assert.match(app, /directHostPc \|\| state\.pc/);
+  assert.match(app, /preferH264ForDirectPlayback/);
+  assert.match(app, /state\.media && !state\.subscriptionPending\) subscribeToBroadcast/);
+  assert.match(room, /data\.type === "p2p:signal"/);
+  assert.match(room, /Only host-to-viewer or viewer-to-host/);
+});
+
 test("server enforces invitations and host publishing", async () => {
   const [worker, room] = await Promise.all([read("src/index.js"), read("src/room.js")]);
   assert.match(worker, /valid invitation is required/i);

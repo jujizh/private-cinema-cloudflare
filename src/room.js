@@ -324,6 +324,49 @@ export class CinemaRoom {
       return;
     }
 
+    if (data.type === "p2p:signal") {
+      // ICE can emit a burst of candidates, so this limit is intentionally
+      // higher than chat while still preventing an unbounded signaling flood.
+      if (!this.consumeSocketRate(socket, meta, "p2p", 80, 10_000)) return;
+      const targetId = safeText(data.to, 80);
+      const signal = data.signal && typeof data.signal === "object" ? data.signal : {};
+      const kind = ["offer", "answer", "candidate", "hangup"].includes(signal.kind) ? signal.kind : "";
+      if (!targetId || !kind) return;
+
+      let cleanSignal;
+      if (kind === "offer" || kind === "answer") {
+        const description = signal.description;
+        if (!description || description.type !== kind || typeof description.sdp !== "string" || description.sdp.length > 450_000) return;
+        cleanSignal = { kind, description: { type: kind, sdp: description.sdp } };
+      } else if (kind === "candidate") {
+        const candidate = signal.candidate;
+        if (candidate === null) cleanSignal = { kind, candidate: null };
+        else if (candidate && typeof candidate === "object" && typeof candidate.candidate === "string" && candidate.candidate.length <= 4096) {
+          cleanSignal = {
+            kind,
+            candidate: {
+              candidate: candidate.candidate,
+              sdpMid: typeof candidate.sdpMid === "string" ? candidate.sdpMid.slice(0, 40) : null,
+              sdpMLineIndex: Number.isInteger(candidate.sdpMLineIndex) ? candidate.sdpMLineIndex : null,
+              usernameFragment: typeof candidate.usernameFragment === "string" ? candidate.usernameFragment.slice(0, 256) : null,
+            },
+          };
+        } else return;
+      } else {
+        cleanSignal = { kind };
+      }
+
+      for (const peer of this.ctx.getWebSockets()) {
+        const peerMeta = socketMeta(peer);
+        if (peerMeta?.id !== targetId) continue;
+        // Only host-to-viewer or viewer-to-host media signaling is allowed.
+        if (peerMeta.role === meta.role || !["host", "viewer"].includes(peerMeta.role) || !["host", "viewer"].includes(meta.role)) return;
+        try { peer.send(JSON.stringify({ type: "p2p:signal", from: meta.id, signal: cleanSignal })); } catch {}
+        return;
+      }
+      return;
+    }
+
     if (data.type === "quality:report") {
       if (!this.consumeSocketRate(socket, meta, "quality", 1, 3_000)) return;
       meta.quality = this.sanitizeQuality(data.quality);
@@ -343,7 +386,7 @@ export class CinemaRoom {
     const number = (item, max) => Math.max(0, Math.min(max, Number(item) || 0));
     return {
       state: ["excellent", "good", "fair", "poor", "connecting", "offline"].includes(quality.state) ? quality.state : "connecting",
-      route: quality.route === "turn" ? "turn" : "direct",
+      route: ["turn", "p2p", "p2p-turn"].includes(quality.route) ? quality.route : "direct",
       transport: ["udp", "tcp", "tls", "unknown"].includes(quality.transport) ? quality.transport : "unknown",
       bitrateKbps: number(quality.bitrateKbps, 100_000),
       packetLoss: number(quality.packetLoss, 100),
@@ -352,6 +395,11 @@ export class CinemaRoom {
       width: number(quality.width, 16_384),
       height: number(quality.height, 16_384),
       fps: number(quality.fps, 240),
+      framesDropped: number(quality.framesDropped, 1_000_000_000),
+      qualityLimitationReason: ["none", "cpu", "bandwidth", "other", "receiver"].includes(quality.qualityLimitationReason)
+        ? quality.qualityLimitationReason
+        : "none",
+      codec: safeText(quality.codec, 16).toUpperCase(),
     };
   }
 
