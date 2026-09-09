@@ -67,3 +67,7 @@ No permanent credential belongs in the repository. Put every secret in Cloudflar
 - The Network panel reports the actual selected WebRTC path and live transport statistics.
 
 See [SECURITY.md](SECURITY.md) for the trust model and [TESTING.md](TESTING.md) for the pre-release checklist.
+
+## License
+
+This is proprietary software. All rights reserved. See [COPYRIGHT.md](COPYRIGHT.md). No open-source license is granted.
