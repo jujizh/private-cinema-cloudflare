@@ -192,14 +192,24 @@ export class CinemaRoom {
       this.room.admittedClients[clientId] = {
         inviteId: claims.jti,
         expiresAt: Math.min(this.room.expiresAt, Number(claims.exp) * 1000),
+        participantId: randomToken(12),
       };
       await this.persist();
+    } else if (!this.room.admittedClients[clientId].participantId) {
+      // Rooms created by earlier releases did not persist a logical participant
+      // identity. Add one lazily so a network handoff does not look like a new
+      // device every time the WebSocket reconnects.
+      this.room.admittedClients[clientId].participantId = randomToken(12);
+      await this.persist();
     }
+
+    const admission = this.room.admittedClients[clientId];
 
     const ticket = randomToken(24);
     await this.ctx.storage.put(`ticket:${ticket}`, {
       claims,
       clientId,
+      participantId: admission.participantId,
       name,
       expiresAt: Date.now() + 60_000,
     });
@@ -218,9 +228,13 @@ export class CinemaRoom {
     await this.ctx.storage.delete(`ticket:${ticketId}`);
     this.assertClaim(ticket.claims);
 
+    let replacingConnection = false;
     for (const oldSocket of this.ctx.getWebSockets()) {
       const old = socketMeta(oldSocket);
       if (old?.clientId === ticket.clientId) {
+        replacingConnection = true;
+        old.replaced = true;
+        oldSocket.serializeAttachment(old);
         try {
           oldSocket.close(4000, "Replaced by a newer connection");
         } catch {}
@@ -231,7 +245,7 @@ export class CinemaRoom {
     const client = pair[0];
     const server = pair[1];
     const meta = {
-      id: randomToken(12),
+      id: ticket.participantId || randomToken(12),
       clientId: ticket.clientId,
       inviteId: ticket.claims.jti,
       role: ticket.claims.role,
@@ -250,7 +264,11 @@ export class CinemaRoom {
       participants: this.participants(),
       media: this.room.activeMedia ? this.mediaAnnouncement() : null,
     }));
-    this.broadcast({ type: "peer:joined", eventId: crypto.randomUUID(), peer: this.publicParticipant(meta) }, meta.id);
+    this.broadcast({
+      type: replacingConnection ? "peer:reconnected" : "peer:joined",
+      eventId: crypto.randomUUID(),
+      peer: this.publicParticipant(meta),
+    }, meta.id);
     this.broadcastPresence();
     this.ctx.waitUntil(this.directoryUpdate());
     return new Response(null, { status: 101, webSocket: client });
@@ -267,7 +285,14 @@ export class CinemaRoom {
   }
 
   participants() {
-    return this.ctx.getWebSockets().map(socketMeta).filter(Boolean).map((meta) => this.publicParticipant(meta));
+    const latestByClient = new Map();
+    for (const socket of this.ctx.getWebSockets()) {
+      const meta = socketMeta(socket);
+      if (!meta) continue;
+      const existing = latestByClient.get(meta.clientId);
+      if (!existing || Number(meta.joinedAt) >= Number(existing.joinedAt)) latestByClient.set(meta.clientId, meta);
+    }
+    return [...latestByClient.values()].map((meta) => this.publicParticipant(meta));
   }
 
   broadcastPresence() {
@@ -406,9 +431,10 @@ export class CinemaRoom {
   async webSocketClose(socket) {
     const meta = socketMeta(socket);
     if (!meta) return;
+    if (meta.replaced) return;
     const replacement = this.ctx.getWebSockets().some((other) => {
       const candidate = socketMeta(other);
-      return candidate?.clientId === meta.clientId && candidate?.id !== meta.id;
+      return other !== socket && candidate?.clientId === meta.clientId;
     });
     if (!replacement) {
       await this.ctx.storage.delete(`session:${meta.clientId}`);

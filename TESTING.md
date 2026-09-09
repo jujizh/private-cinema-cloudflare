@@ -60,13 +60,16 @@ Interpretation:
 
 ## Hybrid P2P test
 
-1. Join with exactly one viewer and begin broadcasting.
+1. Join with one viewer and begin broadcasting.
 2. The viewer should start on the SFU and then switch automatically to
    **Direct P2P** after ICE negotiation completes.
-3. On the same Wi-Fi, expect UDP, low RTT and near-zero loss. If the panel says
+3. Add a second and then a third viewer. Each viewer should remain on a direct
+   P2P or P2P-via-TURN route; the Host's upload will grow once per viewer.
+4. On the same Wi-Fi, expect UDP, low RTT and near-zero loss. If the panel says
    **P2P via TURN**, inspect router client isolation or firewall rules.
-4. Temporarily block direct ICE or test through restrictive mobile networks;
+5. Temporarily block direct ICE or test through restrictive mobile networks;
    playback must remain on/fall back to Cloudflare SFU.
-5. Add a second viewer. The direct connection must close and all viewers should
-   show Cloudflare SFU, preventing per-viewer Host upload scaling.
-6. Remove the second viewer and restart the broadcast to retest the direct path.
+6. Add a fourth viewer. The direct connections must close and all viewers
+   should show Cloudflare SFU, preventing unbounded per-viewer Host upload.
+7. Switch one viewer between Wi-Fi and mobile data. It should reconnect under
+   the same logical participant identity and negotiate a new media path.

@@ -1,4 +1,5 @@
 const $ = (id) => document.getElementById(id);
+const MAX_DIRECT_VIEWERS = 3;
 
 const ui = Object.fromEntries([
   "connectionPill", "connectionText", "entryView", "inviteEntry", "ownerEntry", "ownerDashboard", "closedEntry",
@@ -43,7 +44,7 @@ const state = {
   directPeers: new Map(),
   directPc: null,
   directStream: null,
-  directFallbackTimer: null,
+  directFallbackTimers: new Map(),
 };
 
 function getClientId() {
@@ -409,7 +410,14 @@ function handleSocketMessage(raw) {
     reconcileDirectRoute();
     return;
   }
-  if (message.type === "peer:joined") systemMessage(`${message.peer.name} joined.`);
+  if (message.type === "peer:joined") {
+    systemMessage(`${message.peer.name} joined.`);
+    resetHostDirectPeer(message.peer.id);
+  }
+  if (message.type === "peer:reconnected") {
+    systemMessage(`${message.peer.name} reconnected.`);
+    resetHostDirectPeer(message.peer.id);
+  }
   if (message.type === "peer:left") systemMessage(`${message.peer.name} left.`);
   if (message.type === "chat") addChatMessage(message);
   if (message.type === "reaction") showReaction(message.emoji);
@@ -444,24 +452,47 @@ function directViewerIds() {
   return state.participants.filter((participant) => participant.role === "viewer").map((participant) => participant.id);
 }
 
+function directFanoutAvailable() {
+  const count = directViewerIds().length;
+  return count > 0 && count <= MAX_DIRECT_VIEWERS;
+}
+
+function clearDirectFallbackTimer(viewerId) {
+  const timer = state.directFallbackTimers.get(viewerId);
+  if (timer) clearTimeout(timer);
+  state.directFallbackTimers.delete(viewerId);
+}
+
+function resetHostDirectPeer(viewerId) {
+  if (state.role !== "host") return;
+  const pc = state.directPeers.get(viewerId);
+  if (!pc) return;
+  state.directPeers.delete(viewerId);
+  clearDirectFallbackTimer(viewerId);
+  try { pc.close(); } catch {}
+}
+
 function configureDirectPeer(pc, targetId) {
   pc.addEventListener("connectionstatechange", () => {
     if (pc.connectionState === "connected") {
       if (state.role === "viewer" && state.directPc === pc) activateDirectViewer(pc);
       if (state.role === "host" && state.directPeers.get(targetId) === pc) {
-        clearTimeout(state.directFallbackTimer);
-        toast("Direct two-person route connected");
+        clearDirectFallbackTimer(targetId);
+        toast("Direct small-room route connected");
       }
     }
     if (["failed", "closed"].includes(pc.connectionState)) {
-      if (state.role === "host" && state.directPeers.get(targetId) === pc) state.directPeers.delete(targetId);
+      if (state.role === "host" && state.directPeers.get(targetId) === pc) {
+        clearDirectFallbackTimer(targetId);
+        state.directPeers.delete(targetId);
+      }
       if (state.role === "viewer" && state.directPc === pc) fallbackFromDirect(pc);
     }
   });
 }
 
 async function startHostDirectPeer(viewerId) {
-  if (!state.localStream || state.directPeers.has(viewerId) || directViewerIds().length !== 1) return;
+  if (!state.localStream || state.directPeers.has(viewerId) || !directFanoutAvailable()) return;
   try {
     const pc = new RTCPeerConnection({ iceServers: await getIceServers(), bundlePolicy: "max-bundle", iceTransportPolicy: "all" });
     state.directPeers.set(viewerId, pc);
@@ -478,19 +509,21 @@ async function startHostDirectPeer(viewerId) {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await waitForIceGathering(pc);
-    if (state.directPeers.get(viewerId) !== pc || directViewerIds().length !== 1) {
+    if (state.directPeers.get(viewerId) !== pc || !directFanoutAvailable() || !directViewerIds().includes(viewerId)) {
       pc.close();
       state.directPeers.delete(viewerId);
       return;
     }
     sendSocket({ type: "p2p:signal", to: viewerId, signal: { kind: "offer", description: pc.localDescription } });
-    clearTimeout(state.directFallbackTimer);
-    state.directFallbackTimer = setTimeout(() => {
+    clearDirectFallbackTimer(viewerId);
+    const timer = setTimeout(() => {
       if (state.directPeers.get(viewerId) === pc && pc.connectionState !== "connected") {
         pc.close();
         state.directPeers.delete(viewerId);
+        state.directFallbackTimers.delete(viewerId);
       }
     }, 15_000);
+    state.directFallbackTimers.set(viewerId, timer);
   } catch (error) {
     console.warn("Direct route could not start; SFU remains available", error);
     const pc = state.directPeers.get(viewerId);
@@ -500,7 +533,7 @@ async function startHostDirectPeer(viewerId) {
 }
 
 async function acceptDirectOffer(from, description) {
-  if (state.role !== "viewer" || directViewerIds().length !== 1) return;
+  if (state.role !== "viewer" || !directFanoutAvailable()) return;
   closeViewerDirect(false);
   try {
     const pc = new RTCPeerConnection({ iceServers: await getIceServers(), bundlePolicy: "max-bundle", iceTransportPolicy: "all" });
@@ -569,7 +602,6 @@ function fallbackFromDirect(pc) {
 }
 
 function closeViewerDirect(useFallback = true) {
-  clearTimeout(state.directFallbackTimer);
   const pc = state.directPc;
   state.directPc = null;
   state.directStream = null;
@@ -583,7 +615,8 @@ function closeViewerDirect(useFallback = true) {
 }
 
 function closeAllDirectConnections(notifyPeers = true) {
-  clearTimeout(state.directFallbackTimer);
+  for (const timer of state.directFallbackTimers.values()) clearTimeout(timer);
+  state.directFallbackTimers.clear();
   if (state.role === "host") {
     const peers = [...state.directPeers.entries()];
     state.directPeers.clear();
@@ -599,20 +632,21 @@ function closeAllDirectConnections(notifyPeers = true) {
 function reconcileDirectRoute() {
   const viewerIds = directViewerIds();
   if (state.role === "host") {
-    if (!state.localStream || viewerIds.length !== 1) {
+    if (!state.localStream || !directFanoutAvailable()) {
       closeAllDirectConnections(true);
       return;
     }
     for (const [viewerId, pc] of state.directPeers) {
-      if (viewerId !== viewerIds[0]) {
+      if (!viewerIds.includes(viewerId)) {
         try { pc.close(); } catch {}
+        clearDirectFallbackTimer(viewerId);
         state.directPeers.delete(viewerId);
       }
     }
-    startHostDirectPeer(viewerIds[0]);
+    for (const viewerId of viewerIds) startHostDirectPeer(viewerId);
     return;
   }
-  if (viewerIds.length !== 1 && state.directPc) closeViewerDirect(true);
+  if (!directFanoutAvailable() && state.directPc) closeViewerDirect(true);
 }
 
 function systemMessage(text) {
@@ -1011,10 +1045,12 @@ function openLocalMovie() {
 function launchMovieFile() {
   const file = ui.movieFile.files?.[0];
   if (!file) return;
+  const isMatroska = /\.mkv$/i.test(file.name) || /matroska/i.test(file.type);
   const url = URL.createObjectURL(file);
   const player = window.open(url, "_blank");
   if (player) player.opener = null;
   if (!player) toast("Allow pop-ups, then try again");
+  else if (isMatroska) toast("MKV opened — if Chrome cannot decode it, remux it to MP4 or share VLC/mpv");
   else toast("Movie opened — share that new tab with audio");
   setTimeout(() => URL.revokeObjectURL(url), 12 * 60 * 60 * 1000);
   ui.movieFile.value = "";

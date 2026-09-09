@@ -52,10 +52,12 @@ test("diagnostics report interval loss and the largest active simulcast layer", 
   assert.match(app, /visibilityState !== "visible"[\s\S]*previousRtp\.clear/);
 });
 
-test("one viewer gets a direct P2P fast path with SFU fallback", async () => {
+test("small rooms get direct P2P fan-out with SFU fallback", async () => {
   const [app, room] = await Promise.all([read("public/app.js"), read("src/room.js")]);
   assert.match(app, /function reconcileDirectRoute/);
-  assert.match(app, /directViewerIds\(\)\.length !== 1/);
+  assert.match(app, /MAX_DIRECT_VIEWERS = 3/);
+  assert.match(app, /function directFanoutAvailable/);
+  assert.match(app, /for \(const viewerId of viewerIds\) startHostDirectPeer\(viewerId\)/);
   assert.match(app, /Direct P2P/);
   assert.match(app, /P2P via TURN/);
   assert.match(app, /directHostPc \|\| state\.pc/);
@@ -63,6 +65,17 @@ test("one viewer gets a direct P2P fast path with SFU fallback", async () => {
   assert.match(app, /state\.media && !state\.subscriptionPending\) subscribeToBroadcast/);
   assert.match(room, /data\.type === "p2p:signal"/);
   assert.match(room, /Only host-to-viewer or viewer-to-host/);
+});
+
+test("network reconnects preserve logical participant identity", async () => {
+  const [app, room] = await Promise.all([read("public/app.js"), read("src/room.js")]);
+  assert.match(room, /participantId: randomToken\(12\)/);
+  assert.match(room, /id: ticket\.participantId \|\| randomToken\(12\)/);
+  assert.match(room, /old\.replaced = true/);
+  assert.match(room, /if \(meta\.replaced\) return/);
+  assert.match(room, /peer:reconnected/);
+  assert.match(room, /latestByClient/);
+  assert.match(app, /resetHostDirectPeer/);
 });
 
 test("server enforces invitations and host publishing", async () => {

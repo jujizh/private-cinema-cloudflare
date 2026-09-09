@@ -68,6 +68,27 @@ No permanent credential belongs in the repository. Put every secret in Cloudflar
 
 See [SECURITY.md](SECURITY.md) for the trust model and [TESTING.md](TESTING.md) for the pre-release checklist.
 
+## v2.1.1 small-room routing and reconnection
+
+- Up to three viewers can now receive separate direct WebRTC connections from
+  the Host. Adding a second viewer no longer forces the whole room onto the
+  Cloudflare SFU.
+- A fourth viewer switches the room to SFU fan-out so Host upload and encoding
+  do not continue growing without a bound.
+- Each admitted browser now keeps a stable logical participant ID. Replacing a
+  Wi-Fi connection with mobile data still requires ICE/WebSocket reconnection,
+  but the replacement session is no longer presented as a brand-new device.
+- The local-video picker now allows MKV files. Playback still depends on the
+  codecs inside the container; when the browser cannot decode a file, remux it
+  to browser-compatible MP4 or share a VLC/mpv window.
+- P2P is not limited to a LAN. ICE tries direct internet candidates first and
+  can use the authenticated TURN service when NAT or firewall rules prevent a
+  direct path.
+
+Small-room direct fan-out trades server routing for Host resources. At the
+default 2.2 Mbps profile, three viewers may require roughly 6.6 Mbps plus
+protocol overhead of sustained Host upload. Use the SFU for larger rooms.
+
 ## v2.1.0 hybrid media routing
 
 - With exactly one viewer, the cinema now establishes a direct WebRTC P2P fast
