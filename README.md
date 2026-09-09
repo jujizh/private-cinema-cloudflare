@@ -68,6 +68,14 @@ No permanent credential belongs in the repository. Put every secret in Cloudflar
 
 See [SECURITY.md](SECURITY.md) for the trust model and [TESTING.md](TESTING.md) for the pre-release checklist.
 
+## v2.0.2 motion-quality update
+
+- The lowest simulcast layer now targets 24 fps instead of 18 fps.
+- The middle layer targets 30 fps and receives a larger bitrate budget.
+- Screen-share senders request `maintain-framerate` degradation when the browser supports it.
+- Original quality explicitly pins the subscriber to the full-resolution RID.
+- Stream health now exposes frame drops and the sender's quality limitation reason.
+
 ## License
 
-This is proprietary software. All rights reserved. See [COPYRIGHT.md](COPYRIGHT.md). No open-source license is granted.
+This is proprietary software. All rights reserved. See [COPYRIGHT.md](https://github.com/jujizh/jujizh-jiahao-private-cinema-cloudflare/blob/main/COPYRIGHT.md). No open-source license is granted.

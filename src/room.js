@@ -604,7 +604,7 @@ export class CinemaRoom {
 
   simulcastPreference(quality) {
     if (quality === "data") return { preferredRid: "z", priorityOrdering: "none", ridNotAvailable: "asciibetical" };
-    if (quality === "balanced") return { preferredRid: "m", priorityOrdering: "asciibetical", ridNotAvailable: "asciibetical" };
+    if (quality === "balanced") return { preferredRid: "m", priorityOrdering: "none", ridNotAvailable: "asciibetical" };
     if (quality === "high") return { preferredRid: "a", priorityOrdering: "none", ridNotAvailable: "asciibetical" };
     return { preferredRid: "a", priorityOrdering: "asciibetical", ridNotAvailable: "asciibetical" };
   }

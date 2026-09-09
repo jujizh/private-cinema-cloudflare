@@ -26,6 +26,15 @@ test("chat history has a fixed panel and its own scrollbar", async () => {
   assert.match(app, /ui\.chatLog\.scrollTop = ui\.chatLog\.scrollHeight/);
 });
 
+test("cinema publishing prioritizes motion and keeps every simulcast layer watchable", async () => {
+  const [app, room] = await Promise.all([read("public/app.js"), read("src/room.js")]);
+  assert.match(app, /contentHint = "motion"/);
+  assert.match(app, /degradationPreference = "maintain-framerate"/);
+  assert.match(app, /rid: "z"[\s\S]*maxFramerate: 24/);
+  assert.match(app, /rid: "m"[\s\S]*maxFramerate: 30/);
+  assert.match(room, /quality === "high"[\s\S]*preferredRid: "a"[\s\S]*priorityOrdering: "none"/);
+});
+
 test("server enforces invitations and host publishing", async () => {
   const [worker, room] = await Promise.all([read("src/index.js"), read("src/room.js")]);
   assert.match(worker, /valid invitation is required/i);

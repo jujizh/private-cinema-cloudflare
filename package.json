@@ -1,6 +1,6 @@
 {
   "name": "jiahao-private-cinema-cloudflare",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "private": true,
   "type": "module",
   "description": "Invitation-only private cinema on Cloudflare Workers, Durable Objects and Realtime SFU",

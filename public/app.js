@@ -8,7 +8,7 @@ const ui = Object.fromEntries([
   "previewVideo", "stageEmpty", "stageKicker", "stageTitle", "stageHint", "liveBadge", "reactionLayer", "startShare",
   "stopShare", "openMovie", "movieFile", "qualitySelect", "pictureInPicture", "fullscreenButton", "shareTip",
   "peopleCount", "participants", "healthLabel", "routeValue", "transportValue", "bitrateValue", "latencyValue",
-  "lossValue", "resolutionValue", "hostDiagnostics", "diagnosticList", "chatLog", "chatForm", "chatInput",
+  "lossValue", "resolutionValue", "frameDropsValue", "limitationValue", "hostDiagnostics", "diagnosticList", "chatLog", "chatForm", "chatInput",
   "inviteLabel", "inviteRole", "inviteHours", "createInvite", "inviteResult", "newInviteLink", "copyNewInvite",
   "inviteList", "endRoom", "toast", "busyOverlay",
 ].map((id) => [id, $(id)]));
@@ -542,9 +542,21 @@ async function kickParticipant(participant) {
 
 function qualityProfile() {
   const quality = ui.qualitySelect.value;
-  if (quality === "data") return { width: 960, height: 540, bitrate: 1_000_000 };
-  if (quality === "high") return { width: 1920, height: 1080, bitrate: 4_500_000 };
-  return { width: 1280, height: 720, bitrate: 2_500_000 };
+  if (quality === "data") return { width: 960, height: 540, bitrate: 1_200_000 };
+  if (quality === "high") return { width: 1920, height: 1080, bitrate: 5_000_000 };
+  return { width: 1280, height: 720, bitrate: 3_000_000 };
+}
+
+async function preferMotionOverResolution(sender) {
+  if (!sender?.track || sender.track.kind !== "video") return;
+  try {
+    const parameters = sender.getParameters();
+    parameters.degradationPreference = "maintain-framerate";
+    await sender.setParameters(parameters);
+  } catch (error) {
+    // Safari and some older Chromium builds do not expose this sender option.
+    console.info("Frame-rate preference is not supported by this browser", error);
+  }
 }
 
 async function getIceServers() {
@@ -569,7 +581,7 @@ async function startBroadcast() {
       video: {
         width: { ideal: profile.width, max: profile.width },
         height: { ideal: profile.height, max: profile.height },
-        frameRate: { ideal: 24, max: 30 },
+        frameRate: { ideal: 30, max: 30 },
       },
       audio: true,
     });
@@ -597,12 +609,13 @@ async function startBroadcast() {
       if (track.kind === "video") {
         init.sendEncodings = [
           { rid: "a", scaleResolutionDownBy: 1, maxBitrate: profile.bitrate, maxFramerate: 30 },
-          { rid: "m", scaleResolutionDownBy: 2, maxBitrate: Math.max(700_000, Math.round(profile.bitrate * 0.38)), maxFramerate: 24 },
-          { rid: "z", scaleResolutionDownBy: 4, maxBitrate: Math.max(250_000, Math.round(profile.bitrate * 0.13)), maxFramerate: 18 },
+          { rid: "m", scaleResolutionDownBy: 2, maxBitrate: Math.max(1_200_000, Math.round(profile.bitrate * 0.45)), maxFramerate: 30 },
+          { rid: "z", scaleResolutionDownBy: 4, maxBitrate: Math.max(500_000, Math.round(profile.bitrate * 0.18)), maxFramerate: 24 },
         ];
       }
       return pc.addTransceiver(track, init);
     });
+    await Promise.all(transceivers.map(({ sender }) => preferMotionOverResolution(sender)));
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -856,8 +869,18 @@ async function collectStats() {
     const packetLoss = received + lost > 0 ? Number(((lost / (received + lost)) * 100).toFixed(1)) : 0;
     const rttMs = Math.round(1000 * (Number(pair?.currentRoundTripTime) || Number(remoteInbound?.roundTripTime) || 0));
     const jitterMs = Math.round(1000 * (Number(rtp.jitter) || 0));
+    const framesDropped = Number(rtp.framesDropped) || 0;
+    const qualityLimitationReason = String(rtp.qualityLimitationReason || "none");
     const quality = {
-      state: healthState({ packetLoss, rttMs, jitterMs, bitrateKbps, connected: pc.connectionState === "connected" }),
+      state: healthState({
+        packetLoss,
+        rttMs,
+        jitterMs,
+        bitrateKbps,
+        width: Number(rtp.frameWidth) || 0,
+        fps: Math.round(Number(rtp.framesPerSecond) || 0),
+        connected: pc.connectionState === "connected",
+      }),
       route,
       transport: ["udp", "tcp", "tls"].includes(transport) ? transport : "unknown",
       bitrateKbps,
@@ -867,6 +890,8 @@ async function collectStats() {
       width: Number(rtp.frameWidth) || 0,
       height: Number(rtp.frameHeight) || 0,
       fps: Math.round(Number(rtp.framesPerSecond) || 0),
+      framesDropped,
+      qualityLimitationReason,
     };
     updateNetworkPanel(quality);
     sendSocket({ type: "quality:report", quality });
@@ -875,10 +900,10 @@ async function collectStats() {
   }
 }
 
-function healthState({ packetLoss, rttMs, jitterMs, bitrateKbps, connected }) {
+function healthState({ packetLoss, rttMs, jitterMs, bitrateKbps, width, fps, connected }) {
   if (!connected) return "connecting";
-  if (packetLoss > 8 || rttMs > 650 || jitterMs > 120 || (bitrateKbps && bitrateKbps < 220)) return "poor";
-  if (packetLoss > 3 || rttMs > 380 || jitterMs > 65 || (bitrateKbps && bitrateKbps < 550)) return "fair";
+  if (packetLoss > 8 || rttMs > 650 || jitterMs > 120 || (bitrateKbps && bitrateKbps < 220) || (fps && fps < 18)) return "poor";
+  if (packetLoss > 3 || rttMs > 380 || jitterMs > 65 || (bitrateKbps && bitrateKbps < 550) || (width && width <= 320) || (fps && fps < 23)) return "fair";
   if (packetLoss < 1 && rttMs < 220 && jitterMs < 30) return "excellent";
   return "good";
 }
@@ -892,6 +917,10 @@ function updateNetworkPanel(quality) {
   ui.latencyValue.textContent = quality.rttMs ? `${quality.rttMs} ms` : "—";
   ui.lossValue.textContent = `${quality.packetLoss}%`;
   ui.resolutionValue.textContent = quality.width ? `${quality.width}×${quality.height} · ${quality.fps} fps` : "—";
+  ui.frameDropsValue.textContent = Number.isFinite(quality.framesDropped) ? String(quality.framesDropped) : "—";
+  ui.limitationValue.textContent = quality.qualityLimitationReason && quality.qualityLimitationReason !== "none"
+    ? quality.qualityLimitationReason
+    : "None";
 }
 
 async function toggleRoomLock() {
