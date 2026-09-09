@@ -40,7 +40,7 @@ export async function createRealtimeSession(env, correlationId) {
   return realtimeRequest(env, `/sessions/new${suffix}`);
 }
 
-export async function generateIceServers(env, customIdentifier) {
+export async function generateIceServers(env, _customIdentifier) {
   const fallback = [{ urls: ["stun:stun.cloudflare.com:3478"] }];
   if (!env.TURN_KEY_ID || !env.TURN_KEY_API_TOKEN) {
     return { enabled: false, iceServers: fallback, expiresAt: Date.now() + 60 * 60 * 1000 };
@@ -56,7 +56,9 @@ export async function generateIceServers(env, customIdentifier) {
         Authorization: `Bearer ${env.TURN_KEY_API_TOKEN}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ ttl, customIdentifier: String(customIdentifier).slice(0, 128) }),
+      // Cloudflare's credential endpoint currently documents `ttl` as the
+      // request body. Passing analytics-only fields here causes a 400.
+      body: JSON.stringify({ ttl }),
     },
   );
 

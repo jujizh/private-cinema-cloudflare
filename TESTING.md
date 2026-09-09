@@ -20,7 +20,7 @@ Use current Chrome or Edge.
 2. Open the viewer invitation in a private window with a different client identity.
 3. Verify the presence count is two and no duplicate join/leave messages appear.
 4. Start a tab share with audio and confirm video/audio arrive.
-5. Switch viewer quality among Data saver, Balanced, High, and Auto.
+5. Switch viewer quality among Data saver, Balanced, Best quality, and Auto.
 6. Confirm the Network panel updates every five seconds.
 7. Stop sharing and verify the viewer returns to the waiting screen.
 8. Reconnect both sides after briefly disabling Wi-Fi.
@@ -46,3 +46,14 @@ Interpretation:
 - Very high RTT but low loss: the route is long; TURN or a different viewer network may help.
 - Low bitrate with low loss: browser adaptation or local bandwidth/CPU is the likely constraint.
 - Good metrics but visual stutter: check hardware decoding, browser load, and whether the shared tab itself is smooth.
+
+## Mobile congestion test
+
+1. Start with both Host and viewer set to **Auto (recommended)**.
+2. On the viewer phone, disable Low Power Mode and keep the page in the foreground.
+3. Test on Wi-Fi for two minutes, then repeat on mobile data if available.
+4. A short quality drop is acceptable; sustained packet loss above 5% is not.
+5. Confirm Best quality automatically steps down instead of remaining stuck at
+   1080p when packet loss rises.
+6. Frame drops are now shown per five-second interval. A large old total should
+   no longer make a recovered connection look permanently unhealthy.

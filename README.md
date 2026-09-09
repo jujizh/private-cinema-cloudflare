@@ -68,13 +68,22 @@ No permanent credential belongs in the repository. Put every secret in Cloudflar
 
 See [SECURITY.md](SECURITY.md) for the trust model and [TESTING.md](TESTING.md) for the pre-release checklist.
 
-## v2.0.2 motion-quality update
+## v2.0.3 mobile playback update
 
-- The lowest simulcast layer now targets 24 fps instead of 18 fps.
-- The middle layer targets 30 fps and receives a larger bitrate budget.
-- Screen-share senders request `maintain-framerate` degradation when the browser supports it.
-- Original quality explicitly pins the subscriber to the full-resolution RID.
-- Stream health now exposes frame drops and the sender's quality limitation reason.
+- Best quality and Balanced are adaptive preferences. They can step down when a
+  phone or network cannot sustain the preferred simulcast layer.
+- Default 720p publishing is capped at 2.2 Mbps; the optional 1080p profile is
+  capped at 3.5 Mbps to avoid turning moderate loss into severe frame stalls.
+- Data saver remains an explicit low-bandwidth choice.
+- Packet loss and frame drops are reported per five-second interval instead of
+  as misleading lifetime totals.
+- Host diagnostics consistently show the largest active simulcast layer rather
+  than whichever RTP report the browser returned last.
+- TURN credential generation now sends the request body documented by
+  Cloudflare (`ttl` only), fixing the observed HTTP 400 warning.
+
+For mobile viewers, leave Quality on **Auto (recommended)**. Best quality means
+"prefer the best available layer," not "ignore congestion and force 1080p."
 
 ## License
 

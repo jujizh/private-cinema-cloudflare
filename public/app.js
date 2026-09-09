@@ -35,7 +35,7 @@ const state = {
   defaultGuestToken: "",
   invites: [],
   statsTimer: null,
-  previousBytes: null,
+  previousRtp: new Map(),
   wakeLock: null,
   seenEvents: new Set(),
   subscriptionGeneration: 0,
@@ -542,9 +542,9 @@ async function kickParticipant(participant) {
 
 function qualityProfile() {
   const quality = ui.qualitySelect.value;
-  if (quality === "data") return { width: 960, height: 540, bitrate: 1_200_000 };
-  if (quality === "high") return { width: 1920, height: 1080, bitrate: 5_000_000 };
-  return { width: 1280, height: 720, bitrate: 3_000_000 };
+  if (quality === "data") return { width: 960, height: 540, bitrate: 1_000_000 };
+  if (quality === "high") return { width: 1920, height: 1080, bitrate: 3_500_000 };
+  return { width: 1280, height: 720, bitrate: 2_200_000 };
 }
 
 async function preferMotionOverResolution(sender) {
@@ -609,8 +609,8 @@ async function startBroadcast() {
       if (track.kind === "video") {
         init.sendEncodings = [
           { rid: "a", scaleResolutionDownBy: 1, maxBitrate: profile.bitrate, maxFramerate: 30 },
-          { rid: "m", scaleResolutionDownBy: 2, maxBitrate: Math.max(1_200_000, Math.round(profile.bitrate * 0.45)), maxFramerate: 30 },
-          { rid: "z", scaleResolutionDownBy: 4, maxBitrate: Math.max(500_000, Math.round(profile.bitrate * 0.18)), maxFramerate: 24 },
+          { rid: "m", scaleResolutionDownBy: 2, maxBitrate: Math.max(900_000, Math.round(profile.bitrate * 0.45)), maxFramerate: 30 },
+          { rid: "z", scaleResolutionDownBy: 4, maxBitrate: Math.max(400_000, Math.round(profile.bitrate * 0.18)), maxFramerate: 24 },
         ];
       }
       return pc.addTransceiver(track, init);
@@ -778,7 +778,7 @@ function closePeerConnection() {
   }
   state.pc = null;
   state.sessionId = "";
-  state.previousBytes = null;
+  state.previousRtp.clear();
 }
 
 function hideVideos() {
@@ -837,23 +837,34 @@ async function collectStats() {
   if (!pc || pc.connectionState === "closed") return;
   try {
     const reports = await pc.getStats();
-    let rtp = null;
+    const rtpCandidates = [];
     let pair = null;
-    let remoteInbound = null;
     reports.forEach((report) => {
       const videoKind = report.kind === "video" || report.mediaType === "video";
-      if (videoKind && report.type === (state.role === "host" ? "outbound-rtp" : "inbound-rtp") && !report.isRemote) rtp = report;
+      if (videoKind && report.type === (state.role === "host" ? "outbound-rtp" : "inbound-rtp") && !report.isRemote) {
+        rtpCandidates.push(report);
+      }
       if (report.type === "candidate-pair" && report.state === "succeeded" && (report.nominated || report.selected)) pair = report;
-      if (videoKind && report.type === "remote-inbound-rtp") remoteInbound = report;
     });
+
+    // A simulcast publisher has several outbound-rtp reports. Showing whichever
+    // report happened to be visited last made the Host panel jump between 180p,
+    // 540p and 1080p. Use the largest active layer as the source-quality report.
+    rtpCandidates.sort((left, right) => {
+      const leftPixels = (Number(left.frameWidth) || 0) * (Number(left.frameHeight) || 0);
+      const rightPixels = (Number(right.frameWidth) || 0) * (Number(right.frameHeight) || 0);
+      return rightPixels - leftPixels || (Number(right.bytesSent || right.bytesReceived) || 0) - (Number(left.bytesSent || left.bytesReceived) || 0);
+    });
+    const rtp = rtpCandidates[0];
     if (!rtp) return;
+    const remoteInbound = state.role === "host" && rtp.remoteId ? reports.get(rtp.remoteId) : null;
     const now = Number(rtp.timestamp) || performance.now();
     const bytes = Number(state.role === "host" ? rtp.bytesSent : rtp.bytesReceived) || 0;
+    const previous = state.previousRtp.get(rtp.id);
     let bitrateKbps = 0;
-    if (state.previousBytes && now > state.previousBytes.time) {
-      bitrateKbps = Math.round(((bytes - state.previousBytes.bytes) * 8) / (now - state.previousBytes.time));
+    if (previous && now > previous.time) {
+      bitrateKbps = Math.max(0, Math.round(((bytes - previous.bytes) * 8) / (now - previous.time)));
     }
-    state.previousBytes = { bytes, time: now };
 
     let route = "direct";
     let transport = "unknown";
@@ -864,13 +875,28 @@ async function collectStats() {
       transport = String(local?.protocol || remote?.protocol || "unknown").toLowerCase();
       if (transport === "ssl" || transport === "tls") transport = "tls";
     }
-    const received = Number(rtp.packetsReceived) || 0;
-    const lost = Math.max(0, Number(rtp.packetsLost) || Number(remoteInbound?.packetsLost) || 0);
-    const packetLoss = received + lost > 0 ? Number(((lost / (received + lost)) * 100).toFixed(1)) : 0;
+    const packetCount = Number(state.role === "host" ? rtp.packetsSent : rtp.packetsReceived) || 0;
+    const lost = Math.max(0, Number(rtp.packetsLost ?? remoteInbound?.packetsLost) || 0);
+    const packetDelta = previous ? Math.max(0, packetCount - previous.packetCount) : packetCount;
+    const lostDelta = previous ? Math.max(0, lost - previous.packetsLost) : lost;
+    const lossDenominator = state.role === "host" ? packetDelta : packetDelta + lostDelta;
+    const packetLoss = lossDenominator > 0
+      ? Number(((lostDelta / lossDenominator) * 100).toFixed(1))
+      : 0;
     const rttMs = Math.round(1000 * (Number(pair?.currentRoundTripTime) || Number(remoteInbound?.roundTripTime) || 0));
     const jitterMs = Math.round(1000 * (Number(rtp.jitter) || 0));
-    const framesDropped = Number(rtp.framesDropped) || 0;
-    const qualityLimitationReason = String(rtp.qualityLimitationReason || "none");
+    const droppedTotal = Number(rtp.framesDropped) || 0;
+    const framesDropped = previous ? Math.max(0, droppedTotal - previous.framesDropped) : 0;
+    const qualityLimitationReason = state.role === "host"
+      ? String(rtp.qualityLimitationReason || "none")
+      : "receiver";
+    state.previousRtp.set(rtp.id, {
+      bytes,
+      time: now,
+      framesDropped: droppedTotal,
+      packetCount,
+      packetsLost: lost,
+    });
     const quality = {
       state: healthState({
         packetLoss,
@@ -917,9 +943,9 @@ function updateNetworkPanel(quality) {
   ui.latencyValue.textContent = quality.rttMs ? `${quality.rttMs} ms` : "—";
   ui.lossValue.textContent = `${quality.packetLoss}%`;
   ui.resolutionValue.textContent = quality.width ? `${quality.width}×${quality.height} · ${quality.fps} fps` : "—";
-  ui.frameDropsValue.textContent = Number.isFinite(quality.framesDropped) ? String(quality.framesDropped) : "—";
+  ui.frameDropsValue.textContent = Number.isFinite(quality.framesDropped) ? `${quality.framesDropped} / 5s` : "—";
   ui.limitationValue.textContent = quality.qualityLimitationReason && quality.qualityLimitationReason !== "none"
-    ? quality.qualityLimitationReason
+    ? quality.qualityLimitationReason === "receiver" ? "Receiver" : quality.qualityLimitationReason
     : "None";
 }
 
@@ -1066,7 +1092,13 @@ function bindEvents() {
   ui.endRoom.addEventListener("click", endScreening);
   ui.leaveRoom.addEventListener("click", leaveRoom);
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && state.localStream && !state.wakeLock) requestWakeLock();
+    if (document.visibilityState !== "visible") return;
+    // Browsers throttle timers in background tabs. Throw away the stale
+    // baseline so the first foreground sample is not presented as a five-second
+    // loss/bitrate window.
+    state.previousRtp.clear();
+    if (state.pc) collectStats();
+    if (state.localStream && !state.wakeLock) requestWakeLock();
   });
 }
 

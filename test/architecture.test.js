@@ -32,7 +32,24 @@ test("cinema publishing prioritizes motion and keeps every simulcast layer watch
   assert.match(app, /degradationPreference = "maintain-framerate"/);
   assert.match(app, /rid: "z"[\s\S]*maxFramerate: 24/);
   assert.match(app, /rid: "m"[\s\S]*maxFramerate: 30/);
-  assert.match(room, /quality === "high"[\s\S]*preferredRid: "a"[\s\S]*priorityOrdering: "none"/);
+  assert.match(room, /quality === "high"[\s\S]*preferredRid: "a"[\s\S]*priorityOrdering: "asciibetical"/);
+  assert.doesNotMatch(room, /quality === "high"[^\n]*priorityOrdering: "none"/);
+});
+
+test("TURN credential request uses Cloudflare's documented body", async () => {
+  const sfu = await read("src/sfu.js");
+  assert.match(sfu, /body: JSON\.stringify\(\{ ttl \}\)/);
+  assert.doesNotMatch(sfu, /JSON\.stringify\(\{ ttl, customIdentifier/);
+});
+
+test("diagnostics report interval loss and the largest active simulcast layer", async () => {
+  const app = await read("public/app.js");
+  assert.match(app, /rtpCandidates\.sort/);
+  assert.match(app, /lostDelta/);
+  assert.match(app, /state\.role === "host" \? rtp\.packetsSent : rtp\.packetsReceived/);
+  assert.match(app, /framesDropped[^\n]*\? Math\.max/);
+  assert.match(app, /\$\{quality\.framesDropped\} \/ 5s/);
+  assert.match(app, /visibilityState !== "visible"[\s\S]*previousRtp\.clear/);
 });
 
 test("server enforces invitations and host publishing", async () => {
