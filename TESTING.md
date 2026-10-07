@@ -94,9 +94,14 @@ Interpretation:
 5. Confirm a Viewer cannot POST or DELETE Room Caption Library entries.
 6. Use −1s/+1s until dialogue aligns with the captured movie.
 7. Enter fullscreen and confirm captions remain above the video.
-8. Seek or pause the external Tencent/streaming player and confirm that manual
-   offset correction is required; the cinema cannot read a cross-origin
-   player's private playback clock.
+8. Open a supported local MP4/WebM with **Open local video**, share the new
+   player tab, then pause and seek. Confirm every endpoint's selected subtitle
+   follows automatically.
+9. Share an external Tencent/streaming tab. Confirm **Pause subtitles** and
+   **Resume subtitles** freeze and resume every endpoint's caption clock. A
+   cross-origin service does not expose its private playback state to this app.
+10. Change subtitle size independently on desktop and mobile. Confirm the
+   default Smaller setting remains readable without covering the picture.
 
 ## Capture-source throttling test
 

@@ -215,6 +215,19 @@ export class CinemaRoom {
       ended: Boolean(this.room.endedAt),
       sharing: Boolean(this.room.activeMedia),
       captions: this.captionMetadata(),
+      captionClock: this.captionClockState(),
+    };
+  }
+
+  captionClockState() {
+    const clock = this.room?.captionClock;
+    if (!clock || !Number.isFinite(Number(clock.time))) return null;
+    const now = Date.now();
+    const elapsed = clock.playing ? Math.max(0, now - Number(clock.updatedAt || now)) / 1000 : 0;
+    return {
+      time: Math.max(0, Number(clock.time) + elapsed),
+      playing: Boolean(clock.playing),
+      source: ["capture", "local-player", "manual"].includes(clock.source) ? clock.source : "capture",
     };
   }
 
@@ -518,6 +531,18 @@ export class CinemaRoom {
       if (!this.consumeSocketRate(socket, meta, "reaction", 8, 10_000)) return;
       if (!ALLOWED_REACTIONS.has(data.emoji)) return;
       this.broadcast({ type: "reaction", eventId: crypto.randomUUID(), from: meta.id, emoji: data.emoji }, meta.id);
+      return;
+    }
+
+    if (data.type === "caption:clock") {
+      if (!["host", "owner"].includes(meta.role)) return;
+      if (!this.consumeSocketRate(socket, meta, "captionClock", 20, 10_000)) return;
+      const input = data.clock && typeof data.clock === "object" ? data.clock : {};
+      const time = Math.max(0, Math.min(24 * 60 * 60, Number(input.time) || 0));
+      const source = ["capture", "local-player", "manual"].includes(input.source) ? input.source : "capture";
+      this.room.captionClock = { time, playing: Boolean(input.playing), source, updatedAt: Date.now() };
+      this.ctx.waitUntil(this.persist());
+      this.broadcast({ type: "caption:clock", clock: this.captionClockState() });
       return;
     }
 

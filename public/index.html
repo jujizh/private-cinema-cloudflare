@@ -154,15 +154,24 @@
               <label class="quality-control">Subtitles
                 <select id="captionSelect"><option value="off">Off</option></select>
               </label>
+              <label class="quality-control">Size
+                <select id="captionSize">
+                  <option value="compact" selected>Smaller</option>
+                  <option value="standard">Standard</option>
+                  <option value="large">Larger</option>
+                </select>
+              </label>
               <button id="loadCaptions" class="button button-soft host-only">Add room subtitles</button>
               <input id="captionFile" class="visually-hidden" type="file" accept=".srt,.vtt,text/vtt,application/x-subrip" multiple>
               <button id="deleteCaption" class="button button-danger host-only hidden">Remove selected</button>
+              <button id="captionClockToggle" class="button button-soft host-only">Pause subtitles</button>
               <button id="captionBack" class="icon-button" title="Subtitles 1 second earlier" aria-label="Subtitles 1 second earlier">−1s</button>
               <span id="captionOffset" class="caption-offset">0.0s</span>
               <button id="captionForward" class="icon-button" title="Subtitles 1 second later" aria-label="Subtitles 1 second later">+1s</button>
             </div>
           </div>
           <div id="shareTip" class="share-tip host-only">For the clearest sound, play the video in Chrome or Edge, share that tab, and turn on <strong>Share tab audio</strong>.</div>
+          <div class="caption-tip host-only"><strong>Subtitle timing:</strong> videos opened with “Open local video” pause and seek automatically. For Tencent Video or another external tab, use “Pause subtitles” whenever you pause the film.</div>
           <div id="sourceThrottleWarning" class="source-warning host-only" role="alert">
             <strong>Shared source may be browser-throttled.</strong>
             Move the movie tab into its own browser window and keep it active. 共享源可能被浏览器降速，请把电影标签页移到独立窗口并保持活动。

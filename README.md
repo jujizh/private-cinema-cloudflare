@@ -68,6 +68,20 @@ No permanent credential belongs in the repository. Put every secret in Cloudflar
 
 See [SECURITY.md](SECURITY.md) for the trust model and [TESTING.md](TESTING.md) for the pre-release checklist.
 
+## v2.3.1 Caption sizing and playback clock
+
+- Captions default to a smaller cinema-safe size. Each endpoint can independently
+  choose Smaller, Standard, or Larger without changing anyone else's view.
+- Caption timing now uses a room clock controlled by the Host. Pausing or
+  resuming that clock affects every endpoint while each viewer retains their own
+  language and offset.
+- **Open local video** launches the built-in controlled player. Supported local
+  MP4/WebM playback, pause, and seeking update the room subtitle clock
+  automatically.
+- A third-party cross-origin tab such as Tencent Video cannot expose its private
+  playback state to this site. For those sources, the Host uses the one-click
+  **Pause subtitles / Resume subtitles** control.
+
 ## v2.3.0 Room Caption Library and capture-source guidance
 
 - A Host can upload up to 12 `.srt` or `.vtt` tracks to the current room. The

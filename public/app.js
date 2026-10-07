@@ -18,7 +18,7 @@ const ui = Object.fromEntries([
   "lossValue", "resolutionValue", "sourceValue", "availableBitrateValue", "frameDropsValue", "limitationValue", "hostDiagnostics", "diagnosticList", "chatLog", "chatForm", "chatInput",
   "inviteLabel", "inviteRole", "inviteHours", "createInvite", "inviteResult", "newInviteLink", "copyNewInvite",
   "inviteList", "endRoom", "toast", "busyOverlay", "captionOverlay", "captionSelect", "captionFile",
-  "loadCaptions", "deleteCaption", "captionBack", "captionForward", "captionOffset", "sourceThrottleWarning",
+  "loadCaptions", "deleteCaption", "captionSize", "captionClockToggle", "captionBack", "captionForward", "captionOffset", "sourceThrottleWarning",
 ].map((id) => [id, $(id)]));
 
 const state = {
@@ -61,6 +61,10 @@ const state = {
   captionOffsetSeconds: 0,
   captionTimer: null,
   captionLoadGeneration: 0,
+  captionClock: null,
+  captionClockLastSentAt: 0,
+  playerChannel: null,
+  playerChannelId: "",
   sourceThrottleSamples: 0,
   sourceHealthySamples: 0,
   sourceThrottleWarnedAt: 0,
@@ -442,6 +446,9 @@ function showCinema() {
   document.querySelectorAll(".host-only").forEach((element) => setVisible(element, state.role === "host"));
   ui.cinemaTitle.textContent = state.room?.title || "Private screening";
   ui.qualitySelect.value = localStorage.getItem("cinema.quality") || "auto";
+  ui.captionSize.value = localStorage.getItem("cinema.captionSize") || "compact";
+  ui.captionOverlay.dataset.size = ui.captionSize.value;
+  updateCaptionClockButton();
   updateStageEmpty();
 }
 
@@ -461,6 +468,7 @@ function handleSocketMessage(raw) {
     state.media = message.media;
     state.participants = message.participants || [];
     syncCaptionLibrary(message.room?.captions || []);
+    if (message.room?.captionClock) applyCaptionClock(message.room.captionClock);
     ui.cinemaTitle.textContent = message.room.title;
     renderParticipants();
     ui.lockRoom.textContent = message.room.locked ? "Unlock room" : "Lock room";
@@ -493,6 +501,7 @@ function handleSocketMessage(raw) {
   if (message.type === "reaction") showReaction(message.emoji);
   if (message.type === "quality:update") updateParticipantQuality(message.participant);
   if (message.type === "captions:update") syncCaptionLibrary(message.captions || []);
+  if (message.type === "caption:clock") applyCaptionClock(message.clock);
   if (message.type === "p2p:signal") handleDirectSignal(message);
   if (message.type === "room:lock") {
     state.room.locked = message.locked;
@@ -1079,6 +1088,7 @@ async function startBroadcast() {
     setVisible(ui.liveBadge, true);
     setVisible(ui.startShare, false);
     setVisible(ui.stopShare, true);
+    publishCaptionClock(0, true, "capture", true);
     const iceServers = await getIceServers();
     const sessionId = await createMediaSession();
     const pc = new RTCPeerConnection({ iceServers, bundlePolicy: "max-bundle" });
@@ -1228,6 +1238,7 @@ function waitForConnected(pc, timeoutMs = 15_000) {
 
 async function stopBroadcast(notifyServer = true) {
   const hadStream = Boolean(state.localStream);
+  if (hadStream && state.role === "host") publishCaptionClock(currentCaptionTime(), false, state.captionClock?.source || "capture", true);
   const sessionId = state.sessionId;
   const localStream = state.localStream;
   state.localStream = null;
@@ -1308,13 +1319,32 @@ function launchMovieFile() {
   const file = ui.movieFile.files?.[0];
   if (!file) return;
   const isMatroska = /\.mkv$/i.test(file.name) || /matroska/i.test(file.type);
-  const url = URL.createObjectURL(file);
-  const player = window.open(url, "_blank");
-  if (player) player.opener = null;
-  if (!player) toast("Allow pop-ups, then try again");
-  else if (isMatroska) toast("MKV opened — if Chrome cannot decode it, remux it to MP4 or share VLC/mpv");
-  else toast("Movie opened — share that new tab with audio");
-  setTimeout(() => URL.revokeObjectURL(url), 12 * 60 * 60 * 1000);
+  state.playerChannel?.close();
+  const channelId = crypto.randomUUID();
+  const channel = new BroadcastChannel(`cinema-player-${channelId}`);
+  state.playerChannel = channel;
+  state.playerChannelId = channelId;
+  channel.addEventListener("message", ({ data }) => {
+    if (!data || state.playerChannel !== channel) return;
+    if (data.type === "ready") {
+      channel.postMessage({ type: "load", file, name: file.name });
+      return;
+    }
+    if (data.type === "clock") {
+      const force = ["play", "pause", "seeked", "loadedmetadata", "ended"].includes(data.reason);
+      publishCaptionClock(Number(data.time) || 0, !data.paused, "local-player", force);
+    }
+  });
+  const player = window.open(`/player.html?channel=${encodeURIComponent(channelId)}`, "_blank");
+  if (!player) {
+    channel.close();
+    state.playerChannel = null;
+    toast("Allow pop-ups, then try again");
+  } else if (isMatroska) {
+    toast("MKV opened — automatic timing works if Chrome can decode it; otherwise share VLC/mpv and use the subtitle pause button");
+  } else {
+    toast("Movie opened — pause and seeking will sync room subtitles automatically");
+  }
   ui.movieFile.value = "";
 }
 
@@ -1485,6 +1515,49 @@ function activePlaybackVideo() {
   return state.role === "host" ? ui.previewVideo : ui.remoteVideo;
 }
 
+function applyCaptionClock(clock) {
+  if (!clock || !Number.isFinite(Number(clock.time))) return;
+  state.captionClock = {
+    time: Math.max(0, Number(clock.time)),
+    playing: Boolean(clock.playing),
+    source: ["capture", "local-player", "manual"].includes(clock.source) ? clock.source : "capture",
+    anchoredAt: performance.now(),
+  };
+  updateCaptionClockButton();
+  renderCaption();
+}
+
+function currentCaptionTime() {
+  if (!state.captionClock) return Math.max(0, Number(activePlaybackVideo()?.currentTime || 0));
+  const elapsed = state.captionClock.playing ? (performance.now() - state.captionClock.anchoredAt) / 1000 : 0;
+  return Math.max(0, state.captionClock.time + elapsed);
+}
+
+function publishCaptionClock(time, playing, source = "manual", force = false) {
+  if (state.role !== "host") return;
+  const now = performance.now();
+  applyCaptionClock({ time, playing, source });
+  if (!force && now - state.captionClockLastSentAt < 900) return;
+  state.captionClockLastSentAt = now;
+  sendSocket({ type: "caption:clock", clock: { time: Math.max(0, Number(time) || 0), playing: Boolean(playing), source } });
+}
+
+function toggleCaptionClock() {
+  if (state.role !== "host") return;
+  const time = currentCaptionTime();
+  const playing = state.captionClock ? !state.captionClock.playing : false;
+  publishCaptionClock(time, playing, "manual", true);
+  toast(playing ? "Room subtitles resumed" : "Room subtitles paused");
+}
+
+function updateCaptionClockButton() {
+  if (!ui.captionClockToggle) return;
+  const playing = state.captionClock?.playing !== false;
+  ui.captionClockToggle.textContent = playing ? "Pause subtitles" : "Resume subtitles";
+  ui.captionClockToggle.classList.toggle("button-danger", playing);
+  ui.captionClockToggle.classList.toggle("button-soft", !playing);
+}
+
 function cueAtTime(cues, time) {
   let low = 0;
   let high = cues.length - 1;
@@ -1515,14 +1588,19 @@ function renderCaption() {
     setVisible(ui.captionOverlay, false);
     return;
   }
-  const cue = cueAtTime(track.cues, Math.max(0, Number(video.currentTime || 0) + state.captionOffsetSeconds));
+  const cue = cueAtTime(track.cues, Math.max(0, currentCaptionTime() + state.captionOffsetSeconds));
   ui.captionOverlay.textContent = cue?.text || "";
   setVisible(ui.captionOverlay, Boolean(cue?.text));
 }
 
 function startCaptionRenderer() {
   if (state.captionTimer) return;
-  state.captionTimer = setInterval(renderCaption, 150);
+  state.captionTimer = setInterval(() => {
+    renderCaption();
+    if (state.role === "host" && state.captionClock?.playing && performance.now() - state.captionClockLastSentAt >= 4_000) {
+      publishCaptionClock(currentCaptionTime(), true, state.captionClock.source, true);
+    }
+  }, 150);
 }
 
 function adjustCaptionOffset(delta) {
@@ -1884,7 +1962,13 @@ function bindEvents() {
     setVisible(ui.deleteCaption, state.role === "host" && ui.captionSelect.value !== "off");
     renderCaption();
   });
+  ui.captionSize.addEventListener("change", () => {
+    const size = ["compact", "standard", "large"].includes(ui.captionSize.value) ? ui.captionSize.value : "compact";
+    localStorage.setItem("cinema.captionSize", size);
+    ui.captionOverlay.dataset.size = size;
+  });
   ui.deleteCaption.addEventListener("click", deleteSelectedCaption);
+  ui.captionClockToggle.addEventListener("click", toggleCaptionClock);
   ui.captionBack.addEventListener("click", () => adjustCaptionOffset(-1));
   ui.captionForward.addEventListener("click", () => adjustCaptionOffset(1));
   ui.fullscreenButton.addEventListener("click", () => ui.stage.requestFullscreen?.());

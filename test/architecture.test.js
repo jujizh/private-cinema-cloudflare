@@ -125,6 +125,22 @@ test("room caption library stores shared SRT or VTT tracks while each endpoint c
   assert.match(room, /type: "captions:update"/);
 });
 
+test("room captions have responsive sizing and a host-synchronised playback clock", async () => {
+  const [app, html, styles, room, player] = await Promise.all([
+    read("public/app.js"), read("public/index.html"), read("public/styles.css"), read("src/room.js"), read("public/player.js"),
+  ]);
+  assert.match(html, /id="captionSize"/);
+  assert.match(html, /id="captionClockToggle"/);
+  assert.match(styles, /caption-overlay\[data-size="standard"\]/);
+  assert.match(styles, /font-size:clamp\(12px,1\.15vw,20px\)/);
+  assert.match(app, /function currentCaptionTime/);
+  assert.match(app, /type: "caption:clock"/);
+  assert.match(room, /captionClockState/);
+  assert.match(room, /data\.type === "caption:clock"/);
+  assert.match(player, /BroadcastChannel/);
+  assert.match(player, /"play", "pause", "seeked"/);
+});
+
 test("host is warned when an otherwise healthy browser capture is background-throttled", async () => {
   const [app, html, styles] = await Promise.all([read("public/app.js"), read("public/index.html"), read("public/styles.css")]);
   assert.match(html, /共享源可能被浏览器降速，请把电影标签页移到独立窗口并保持活动/);
