@@ -104,14 +104,35 @@ test("network reconnects preserve logical participant identity", async () => {
   assert.match(room, /async alarm\(\)/);
 });
 
-test("each endpoint can load local SRT or VTT subtitle tracks", async () => {
-  const [app, html, styles] = await Promise.all([read("public/app.js"), read("public/index.html"), read("public/styles.css")]);
+test("room caption library stores shared SRT or VTT tracks while each endpoint chooses independently", async () => {
+  const [app, html, styles, worker, room] = await Promise.all([
+    read("public/app.js"), read("public/index.html"), read("public/styles.css"), read("src/index.js"), read("src/room.js"),
+  ]);
   assert.match(html, /id="captionFile"[^>]*\.srt,.vtt/);
   assert.match(html, /id="captionSelect"/);
+  assert.match(html, /Add room subtitles/);
   assert.match(app, /function parseCaptionFile/);
   assert.match(app, /function cueAtTime/);
+  assert.match(app, /function syncCaptionLibrary/);
+  assert.match(app, /captions:update/);
+  assert.match(app, /\/control\/captions/);
   assert.match(app, /textContent = cue\?\.text/);
   assert.match(styles, /\.caption-overlay/);
+  assert.match(worker, /action === "captions" \|\| action\.startsWith\("captions\/"\)/);
+  assert.match(room, /CAPTION_MAX_TRACKS = 12/);
+  assert.match(room, /storeCaptionContent/);
+  assert.match(room, /this\.assertClaim\(claims, \["host", "owner"\]\)/);
+  assert.match(room, /type: "captions:update"/);
+});
+
+test("host is warned when an otherwise healthy browser capture is background-throttled", async () => {
+  const [app, html, styles] = await Promise.all([read("public/app.js"), read("public/index.html"), read("public/styles.css")]);
+  assert.match(html, /共享源可能被浏览器降速，请把电影标签页移到独立窗口并保持活动/);
+  assert.match(app, /function updateSourceThrottleWarning/);
+  assert.match(app, /sourceFps >= 24/);
+  assert.match(app, /quality\.fps > 0 && quality\.fps <= 20/);
+  assert.match(app, /sourceThrottleSamples >= 3/);
+  assert.match(styles, /\.source-warning\.is-active/);
 });
 
 test("server enforces invitations and host publishing", async () => {

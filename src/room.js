@@ -10,7 +10,11 @@ import {
 import { createRealtimeSession, generateIceServers, realtimeRequest } from "./sfu.js";
 
 const textDecoder = new TextDecoder();
+const textEncoder = new TextEncoder();
 const ROOM_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const CAPTION_MAX_TRACKS = 12;
+const CAPTION_MAX_BYTES = 768 * 1024;
+const CAPTION_CHUNK_BYTES = 48 * 1024;
 const ALLOWED_REACTIONS = new Set(["❤️", "😂", "🥹", "😍", "👏", "🔥"]);
 
 function claimsFromRequest(request) {
@@ -49,6 +53,12 @@ export class CinemaRoom {
       if (url.pathname === "/internal/ticket" && request.method === "POST") return this.createTicket(request);
       if (url.pathname === "/internal/ws") return this.openSocket(request);
       if (url.pathname === "/internal/status" && request.method === "GET") return this.getStatus(request);
+      if (url.pathname === "/internal/captions" && request.method === "GET") return this.listCaptions(request);
+      if (url.pathname === "/internal/control/captions" && request.method === "POST") return this.addCaption(request);
+      const captionMatch = url.pathname.match(/^\/internal\/captions\/([A-Za-z0-9_-]{16,80})$/);
+      if (captionMatch && request.method === "GET") return this.getCaption(request, captionMatch[1]);
+      const captionControlMatch = url.pathname.match(/^\/internal\/control\/captions\/([A-Za-z0-9_-]{16,80})$/);
+      if (captionControlMatch && request.method === "DELETE") return this.deleteCaption(request, captionControlMatch[1]);
       if (url.pathname.startsWith("/internal/control/")) return this.control(request, url.pathname.split("/").pop());
       if (url.pathname.startsWith("/internal/media/")) return this.media(request, url.pathname.split("/").pop());
       return jsonResponse({ error: "Not found" }, { status: 404 });
@@ -145,7 +155,7 @@ export class CinemaRoom {
     const now = Date.now();
     const hours = Math.max(1, Math.min(168, Number(body.expiresInHours) || 24));
     this.room = {
-      schema: 2,
+      schema: 3,
       id: safeText(body.roomId, 80),
       title: safeText(body.title, 100) || "Private screening",
       createdAt: now,
@@ -158,6 +168,7 @@ export class CinemaRoom {
       admittedClients: {},
       activeMedia: null,
       pendingMedia: null,
+      captions: [],
     };
     const host = await this.issueInvite("host", "Owner", hours);
     const viewer = await this.issueInvite("viewer", "Guests", hours);
@@ -203,7 +214,120 @@ export class CinemaRoom {
       locked: this.room.locked,
       ended: Boolean(this.room.endedAt),
       sharing: Boolean(this.room.activeMedia),
+      captions: this.captionMetadata(),
     };
+  }
+
+  captionMetadata() {
+    return (this.room?.captions || []).map((caption) => ({
+      id: caption.id,
+      name: caption.name,
+      language: caption.language,
+      format: caption.format,
+      bytes: caption.bytes,
+      createdAt: caption.createdAt,
+    }));
+  }
+
+  captionStorageKey(id, index) {
+    return `caption:${id}:${index}`;
+  }
+
+  async storeCaptionContent(id, content) {
+    const bytes = textEncoder.encode(content);
+    const chunkCount = Math.ceil(bytes.byteLength / CAPTION_CHUNK_BYTES);
+    for (let index = 0; index < chunkCount; index += 1) {
+      const start = index * CAPTION_CHUNK_BYTES;
+      const chunk = bytes.slice(start, Math.min(bytes.byteLength, start + CAPTION_CHUNK_BYTES));
+      await this.ctx.storage.put(this.captionStorageKey(id, index), chunk);
+    }
+    return { bytes: bytes.byteLength, chunkCount };
+  }
+
+  async loadCaptionContent(caption) {
+    const chunks = [];
+    let total = 0;
+    for (let index = 0; index < caption.chunkCount; index += 1) {
+      const stored = await this.ctx.storage.get(this.captionStorageKey(caption.id, index));
+      if (!stored) throw new HttpError(410, "Subtitle data is no longer available", "caption_missing");
+      const chunk = stored instanceof Uint8Array ? stored : new Uint8Array(stored);
+      chunks.push(chunk);
+      total += chunk.byteLength;
+    }
+    const joined = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      joined.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return textDecoder.decode(joined);
+  }
+
+  async removeCaptionContent(caption) {
+    const keys = Array.from({ length: caption.chunkCount }, (_, index) => this.captionStorageKey(caption.id, index));
+    if (keys.length) await this.ctx.storage.delete(keys);
+  }
+
+  async listCaptions(request) {
+    const claims = claimsFromRequest(request);
+    this.assertClaim(claims);
+    return jsonResponse({ captions: this.captionMetadata() });
+  }
+
+  async getCaption(request, captionId) {
+    const claims = claimsFromRequest(request);
+    this.assertClaim(claims);
+    const caption = (this.room.captions || []).find((item) => item.id === captionId);
+    if (!caption) throw new HttpError(404, "Subtitle track not found", "caption_not_found");
+    const metadata = this.captionMetadata().find((item) => item.id === captionId);
+    return jsonResponse({ caption: { ...metadata, content: await this.loadCaptionContent(caption) } });
+  }
+
+  async addCaption(request) {
+    const claims = claimsFromRequest(request);
+    this.assertClaim(claims, ["host", "owner"]);
+    this.room.captions ||= [];
+    if (this.room.captions.length >= CAPTION_MAX_TRACKS) {
+      throw new HttpError(409, `A room can contain up to ${CAPTION_MAX_TRACKS} subtitle tracks`, "caption_limit");
+    }
+    const body = await readJson(request, CAPTION_MAX_BYTES + 32 * 1024);
+    const format = String(body.format || "").toLowerCase() === "vtt" ? "vtt" : "srt";
+    const content = String(body.content || "").replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+    const encoded = textEncoder.encode(content);
+    if (!content.includes("-->") || encoded.byteLength < 16) {
+      throw new HttpError(400, "No timed subtitles were found in this file", "caption_invalid");
+    }
+    if (encoded.byteLength > CAPTION_MAX_BYTES) {
+      throw new HttpError(413, "Subtitle file is larger than 768 KB", "caption_too_large");
+    }
+    const id = randomToken(18);
+    const stored = await this.storeCaptionContent(id, content);
+    const caption = {
+      id,
+      name: safeText(body.name, 100) || `Subtitles ${this.room.captions.length + 1}`,
+      language: safeText(body.language, 35) || "Undetermined",
+      format,
+      bytes: stored.bytes,
+      chunkCount: stored.chunkCount,
+      createdAt: Date.now(),
+    };
+    this.room.captions.push(caption);
+    await this.persist();
+    this.broadcast({ type: "captions:update", captions: this.captionMetadata() });
+    const metadata = this.captionMetadata();
+    return jsonResponse({ captions: metadata, caption: metadata.find((item) => item.id === id) });
+  }
+
+  async deleteCaption(request, captionId) {
+    const claims = claimsFromRequest(request);
+    this.assertClaim(claims, ["host", "owner"]);
+    const index = (this.room.captions || []).findIndex((item) => item.id === captionId);
+    if (index < 0) throw new HttpError(404, "Subtitle track not found", "caption_not_found");
+    const [caption] = this.room.captions.splice(index, 1);
+    await this.removeCaptionContent(caption);
+    await this.persist();
+    this.broadcast({ type: "captions:update", captions: this.captionMetadata() });
+    return jsonResponse({ ok: true, captions: this.captionMetadata() });
   }
 
   async createTicket(request) {

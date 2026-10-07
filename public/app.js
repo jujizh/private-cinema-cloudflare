@@ -18,7 +18,7 @@ const ui = Object.fromEntries([
   "lossValue", "resolutionValue", "sourceValue", "availableBitrateValue", "frameDropsValue", "limitationValue", "hostDiagnostics", "diagnosticList", "chatLog", "chatForm", "chatInput",
   "inviteLabel", "inviteRole", "inviteHours", "createInvite", "inviteResult", "newInviteLink", "copyNewInvite",
   "inviteList", "endRoom", "toast", "busyOverlay", "captionOverlay", "captionSelect", "captionFile",
-  "loadCaptions", "captionBack", "captionForward", "captionOffset",
+  "loadCaptions", "deleteCaption", "captionBack", "captionForward", "captionOffset", "sourceThrottleWarning",
 ].map((id) => [id, $(id)]));
 
 const state = {
@@ -60,6 +60,10 @@ const state = {
   captionTracks: [],
   captionOffsetSeconds: 0,
   captionTimer: null,
+  captionLoadGeneration: 0,
+  sourceThrottleSamples: 0,
+  sourceHealthySamples: 0,
+  sourceThrottleWarnedAt: 0,
   sfuSenderTracks: new Map(),
   sfuStandby: false,
   sfuStandbyDesired: false,
@@ -456,6 +460,7 @@ function handleSocketMessage(raw) {
     state.room = message.room;
     state.media = message.media;
     state.participants = message.participants || [];
+    syncCaptionLibrary(message.room?.captions || []);
     ui.cinemaTitle.textContent = message.room.title;
     renderParticipants();
     ui.lockRoom.textContent = message.room.locked ? "Unlock room" : "Lock room";
@@ -487,6 +492,7 @@ function handleSocketMessage(raw) {
   if (message.type === "chat") addChatMessage(message);
   if (message.type === "reaction") showReaction(message.emoji);
   if (message.type === "quality:update") updateParticipantQuality(message.participant);
+  if (message.type === "captions:update") syncCaptionLibrary(message.captions || []);
   if (message.type === "p2p:signal") handleDirectSignal(message);
   if (message.type === "room:lock") {
     state.room.locked = message.locked;
@@ -1230,6 +1236,7 @@ async function stopBroadcast(notifyServer = true) {
   state.sfuStandbyDesired = false;
   state.sfuStandby = false;
   state.sfuSenderTracks.clear();
+  resetSourceThrottleWarning();
   closeAllDirectConnections(true);
   if (localStream) localStream.getTracks().forEach((track) => track.stop());
   closePeerConnection();
@@ -1346,30 +1353,132 @@ function parseCaptionFile(source) {
   return cues.sort((left, right) => left.start - right.start);
 }
 
+const CAPTION_LANGUAGE_NAMES = {
+  en: "English",
+  eng: "English",
+  ru: "Русский",
+  rus: "Русский",
+  zh: "中文",
+  "zh-cn": "简体中文",
+  "zh-hans": "简体中文",
+  "zh-tw": "繁體中文",
+  "zh-hant": "繁體中文",
+  cn: "简体中文",
+  es: "Español",
+  fr: "Français",
+  de: "Deutsch",
+  fa: "فارسی",
+  ar: "العربية",
+  ja: "日本語",
+  ko: "한국어",
+};
+
+function captionIdentity(fileName) {
+  const stem = String(fileName || "Subtitles").replace(/\.(srt|vtt)$/i, "");
+  const tokens = stem.toLowerCase().split(/[._\-\s]+/).filter(Boolean);
+  let code = "";
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    const one = tokens[index];
+    const two = index > 0 ? `${tokens[index - 1]}-${one}` : "";
+    if (CAPTION_LANGUAGE_NAMES[two]) { code = two; break; }
+    if (CAPTION_LANGUAGE_NAMES[one]) { code = one; break; }
+  }
+  const language = CAPTION_LANGUAGE_NAMES[code] || "Undetermined";
+  return { name: language === "Undetermined" ? stem : language, language };
+}
+
+function syncCaptionLibrary(captions) {
+  const previous = new Map(state.captionTracks.map((track) => [track.id, track]));
+  const selected = ui.captionSelect?.value || "off";
+  state.captionTracks = captions.map((caption) => ({
+    ...caption,
+    cues: previous.get(caption.id)?.cues || null,
+  }));
+  ui.captionSelect.replaceChildren(new Option("Off", "off"));
+  for (const caption of state.captionTracks) {
+    const label = caption.language && caption.language !== caption.name
+      ? `${caption.language} — ${caption.name}`
+      : caption.name;
+    ui.captionSelect.appendChild(new Option(label, caption.id));
+  }
+  ui.captionSelect.value = state.captionTracks.some((caption) => caption.id === selected) ? selected : "off";
+  setVisible(ui.deleteCaption, state.role === "host" && ui.captionSelect.value !== "off");
+  startCaptionRenderer();
+  renderCaption();
+}
+
 async function loadCaptionFiles() {
+  if (state.role !== "host") return;
   const files = [...(ui.captionFile.files || [])];
+  let lastCaption = null;
   for (const file of files) {
-    if (file.size > 3 * 1024 * 1024) {
-      toast(`${file.name} is too large`);
+    if (file.size > 768 * 1024) {
+      toast(`${file.name} is larger than 768 KB`);
       continue;
     }
-    const cues = parseCaptionFile(await file.text());
+    const content = await file.text();
+    const cues = parseCaptionFile(content);
     if (!cues.length) {
       toast(`No timed captions found in ${file.name}`);
       continue;
     }
-    const id = crypto.randomUUID();
-    state.captionTracks.push({ id, name: file.name.replace(/\.(srt|vtt)$/i, ""), cues });
-    const option = document.createElement("option");
-    option.value = id;
-    option.textContent = file.name.replace(/\.(srt|vtt)$/i, "");
-    ui.captionSelect.appendChild(option);
-    ui.captionSelect.value = id;
-    toast(`${cues.length} subtitle cues loaded locally`);
+    const identity = captionIdentity(file.name);
+    try {
+      const result = await api(`/api/rooms/${state.roomId}/control/captions`, {
+        method: "POST",
+        body: JSON.stringify({
+          name: identity.name,
+          language: identity.language,
+          format: file.name.toLowerCase().endsWith(".vtt") ? "vtt" : "srt",
+          content,
+        }),
+      });
+      syncCaptionLibrary(result.captions || []);
+      lastCaption = result.caption;
+      const track = state.captionTracks.find((item) => item.id === result.caption?.id);
+      if (track) track.cues = cues;
+      toast(`${identity.name} is available to everyone in the room`);
+    } catch (error) {
+      toast(error.message);
+    }
   }
   ui.captionFile.value = "";
-  startCaptionRenderer();
+  if (lastCaption) {
+    ui.captionSelect.value = lastCaption.id;
+    setVisible(ui.deleteCaption, true);
+  }
   renderCaption();
+}
+
+async function ensureCaptionLoaded(caption) {
+  if (!caption || caption.cues) return caption;
+  const generation = ++state.captionLoadGeneration;
+  try {
+    const result = await api(`/api/rooms/${state.roomId}/captions/${caption.id}`);
+    if (generation !== state.captionLoadGeneration) return null;
+    const current = state.captionTracks.find((item) => item.id === caption.id);
+    if (!current) return null;
+    current.cues = parseCaptionFile(result.caption?.content || "");
+    if (!current.cues.length) throw new Error("This subtitle track has no readable cues");
+    renderCaption();
+    return current;
+  } catch (error) {
+    toast(error.message);
+    return null;
+  }
+}
+
+async function deleteSelectedCaption() {
+  if (state.role !== "host" || ui.captionSelect.value === "off") return;
+  const caption = state.captionTracks.find((item) => item.id === ui.captionSelect.value);
+  if (!caption || !confirm(`Remove “${caption.name}” from this room?`)) return;
+  try {
+    const result = await api(`/api/rooms/${state.roomId}/control/captions/${caption.id}`, { method: "DELETE" });
+    syncCaptionLibrary(result.captions || []);
+    toast("Subtitle track removed");
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 function activePlaybackVideo() {
@@ -1393,6 +1502,15 @@ function renderCaption() {
   const track = state.captionTracks.find((item) => item.id === ui.captionSelect.value);
   const video = activePlaybackVideo();
   if (!track || !video?.srcObject) {
+    ui.captionOverlay.textContent = "";
+    setVisible(ui.captionOverlay, false);
+    return;
+  }
+  if (!track.cues) {
+    if (!track.loading) {
+      track.loading = true;
+      ensureCaptionLoaded(track).finally(() => { track.loading = false; });
+    }
     ui.captionOverlay.textContent = "";
     setVisible(ui.captionOverlay, false);
     return;
@@ -1422,6 +1540,56 @@ function startStats() {
 function stopStats() {
   clearInterval(state.statsTimer);
   state.statsTimer = null;
+}
+
+function resetSourceThrottleWarning() {
+  state.sourceThrottleSamples = 0;
+  state.sourceHealthySamples = 0;
+  ui.sourceThrottleWarning?.classList.remove("is-active");
+}
+
+function updateSourceThrottleWarning(quality) {
+  if (state.role !== "host" || !state.localStream) {
+    resetSourceThrottleWarning();
+    return;
+  }
+
+  // Chrome can report a 30 fps capture track while an occluded/background
+  // source tab is actually delivered to WebRTC at roughly 15 fps. Only flag
+  // this when packet loss and the sender's own network/CPU limiter do not
+  // explain the reduction.
+  const sourceCanProduceMotion = quality.sourceFps >= 24;
+  const encodedFpsIsLow = quality.fps > 0 && quality.fps <= 20;
+  const senderIsNotLimited = !["bandwidth", "cpu"].includes(quality.qualityLimitationReason);
+  const enoughEstimatedBandwidth = !quality.availableBitrateKbps
+    || quality.availableBitrateKbps >= Math.max(3_500, quality.bitrateKbps * 1.25);
+  const likelyBrowserThrottle = sourceCanProduceMotion
+    && encodedFpsIsLow
+    && quality.packetLoss <= 1
+    && senderIsNotLimited
+    && enoughEstimatedBandwidth;
+
+  if (likelyBrowserThrottle) {
+    state.sourceThrottleSamples += 1;
+    state.sourceHealthySamples = 0;
+  } else if (quality.fps >= 23) {
+    state.sourceHealthySamples += 1;
+    state.sourceThrottleSamples = 0;
+  } else {
+    state.sourceThrottleSamples = Math.max(0, state.sourceThrottleSamples - 1);
+    state.sourceHealthySamples = 0;
+  }
+
+  if (state.sourceThrottleSamples >= 3) {
+    ui.sourceThrottleWarning?.classList.add("is-active");
+    const now = Date.now();
+    if (now - state.sourceThrottleWarnedAt > 60_000) {
+      state.sourceThrottleWarnedAt = now;
+      toast("The shared movie source appears throttled — move it to its own active window");
+    }
+  } else if (state.sourceHealthySamples >= 2) {
+    ui.sourceThrottleWarning?.classList.remove("is-active");
+  }
 }
 
 async function collectStats() {
@@ -1541,6 +1709,7 @@ async function collectStats() {
       sourceFps: Math.round(Number(sourceSettings.frameRate) || 0),
       availableBitrateKbps,
     };
+    updateSourceThrottleWarning(quality);
     updateNetworkPanel(quality);
     sendSocket({ type: "quality:report", quality });
   } catch (error) {
@@ -1710,7 +1879,12 @@ function bindEvents() {
   ui.movieFile.addEventListener("change", launchMovieFile);
   ui.loadCaptions.addEventListener("click", () => ui.captionFile.click());
   ui.captionFile.addEventListener("change", loadCaptionFiles);
-  ui.captionSelect.addEventListener("change", renderCaption);
+  ui.captionSelect.addEventListener("change", () => {
+    state.captionLoadGeneration += 1;
+    setVisible(ui.deleteCaption, state.role === "host" && ui.captionSelect.value !== "off");
+    renderCaption();
+  });
+  ui.deleteCaption.addEventListener("click", deleteSelectedCaption);
   ui.captionBack.addEventListener("click", () => adjustCaptionOffset(-1));
   ui.captionForward.addEventListener("click", () => adjustCaptionOffset(1));
   ui.fullscreenButton.addEventListener("click", () => ui.stage.requestFullscreen?.());

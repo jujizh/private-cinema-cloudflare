@@ -83,6 +83,12 @@ Open `/host`. Before creating a real room, confirm:
 5. Revoking that invitation disconnects the viewer and prevents re-entry.
 6. A viewer cannot start broadcasting, even after changing the page URL or browser code.
 7. Locking the room blocks a brand-new device, while a previously admitted viewer can reconnect.
+8. Add two small subtitle files from the Host controls and confirm both appear
+   on the invited viewer without exposing a public download URL.
+
+No new Cloudflare binding or secret is required for v2.3.0. Room subtitle data
+uses the existing `ROOMS` Durable Object storage. Existing v2 rooms without a
+`captions` field are migrated lazily and continue to work.
 
 ## 6. Test on a real cross-country path
 

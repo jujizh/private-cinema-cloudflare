@@ -83,13 +83,28 @@ Interpretation:
 10. Briefly interrupt the Host's control connection. Existing media and screen
    capture should remain alive during the 30-second reconnect grace period.
 
-## Endpoint subtitle test
+## Room Caption Library test
 
-1. On one endpoint choose **Load SRT/VTT** and load an English `.srt` file.
-2. On another endpoint load a Russian `.vtt` file. Confirm the files and chosen
-   tracks remain independent and are not sent to the room.
-3. Use −1s/+1s until dialogue aligns with the captured movie.
-4. Enter fullscreen and confirm captions remain above the video.
-5. Seek or pause the external Tencent/streaming player and confirm that manual
+1. As Host, choose **Add room subtitles** and select English `.srt` and Russian
+   `.vtt` files together.
+2. Confirm both tracks appear on every connected endpoint without a refresh.
+3. Choose English on one device and Russian on another. Confirm each selection
+   and offset remain independent.
+4. As Host, remove one selected track. Confirm it disappears everywhere.
+5. Confirm a Viewer cannot POST or DELETE Room Caption Library entries.
+6. Use −1s/+1s until dialogue aligns with the captured movie.
+7. Enter fullscreen and confirm captions remain above the video.
+8. Seek or pause the external Tencent/streaming player and confirm that manual
    offset correction is required; the cinema cannot read a cross-origin
    player's private playback clock.
+
+## Capture-source throttling test
+
+1. Share a 24/30 fps movie tab and keep it inside the same window as several
+   foreground tabs. Move away from the movie tab and observe diagnostics for at
+   least 20 seconds.
+2. If capture source remains 24/30 fps while encoded output falls to 20 fps or
+   below without packet loss, confirm the source warning becomes highlighted.
+3. Move the movie tab to a dedicated browser window and leave the window
+   visible. Confirm output recovers to at least 23 fps and the highlight clears
+   after two healthy samples.

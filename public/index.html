@@ -7,8 +7,8 @@
   <meta name="color-scheme" content="dark">
   <title>Jiahao Private Cinema</title>
   <meta name="description" content="An invitation-only private cinema for watching together across the world.">
-  <link rel="stylesheet" href="/styles.css?v=2.2.3">
-  <script type="module" src="/app.js?v=2.2.3"></script>
+  <link rel="stylesheet" href="/styles.css?v=2.3.0">
+  <script type="module" src="/app.js?v=2.3.0"></script>
 </head>
 <body>
   <div class="grain" aria-hidden="true"></div>
@@ -154,14 +154,19 @@
               <label class="quality-control">Subtitles
                 <select id="captionSelect"><option value="off">Off</option></select>
               </label>
-              <button id="loadCaptions" class="button button-soft">Load SRT/VTT</button>
+              <button id="loadCaptions" class="button button-soft host-only">Add room subtitles</button>
               <input id="captionFile" class="visually-hidden" type="file" accept=".srt,.vtt,text/vtt,application/x-subrip" multiple>
+              <button id="deleteCaption" class="button button-danger host-only hidden">Remove selected</button>
               <button id="captionBack" class="icon-button" title="Subtitles 1 second earlier" aria-label="Subtitles 1 second earlier">−1s</button>
               <span id="captionOffset" class="caption-offset">0.0s</span>
               <button id="captionForward" class="icon-button" title="Subtitles 1 second later" aria-label="Subtitles 1 second later">+1s</button>
             </div>
           </div>
           <div id="shareTip" class="share-tip host-only">For the clearest sound, play the video in Chrome or Edge, share that tab, and turn on <strong>Share tab audio</strong>.</div>
+          <div id="sourceThrottleWarning" class="source-warning host-only" role="alert">
+            <strong>Shared source may be browser-throttled.</strong>
+            Move the movie tab into its own browser window and keep it active. 共享源可能被浏览器降速，请把电影标签页移到独立窗口并保持活动。
+          </div>
         </section>
 
         <aside class="sidebar">

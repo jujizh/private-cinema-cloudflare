@@ -68,6 +68,28 @@ No permanent credential belongs in the repository. Put every secret in Cloudflar
 
 See [SECURITY.md](SECURITY.md) for the trust model and [TESTING.md](TESTING.md) for the pre-release checklist.
 
+## v2.3.0 Room Caption Library and capture-source guidance
+
+- A Host can upload up to 12 `.srt` or `.vtt` tracks to the current room. The
+  tracks are stored with that room in Durable Object storage and are removed
+  when the room is permanently deleted.
+- Every invited endpoint receives the same track list but independently chooses
+  its language, offset, or **Off**. Selecting Russian on one device does not
+  change English on another device.
+- Only authorized Hosts can add or remove tracks. A valid room invitation is
+  required to download a track; subtitle files are not exposed on a public URL.
+- The Host UI now always explains Chrome's capture-source throttling workaround:
+  move the movie tab into its own browser window and keep that window active.
+  When the captured source reports 24/30 fps but WebRTC stays near 15 fps for
+  several samples without network loss, the warning is highlighted and a toast
+  is shown.
+
+Room captions use the live screen-share clock plus each endpoint's manual
+offset. A browser cannot read the private playback clock of a Tencent Video or
+other cross-origin player, so pausing/seeking that external player may require
+offset correction. Exact pause/seek synchronization requires a future Host
+Companion or an integrated local player that owns the movie clock.
+
 ## v2.2.3 quality-first direct media and room cleanup
 
 - Direct P2P now requests a single full-resolution encoding and uses
@@ -100,8 +122,8 @@ See [SECURITY.md](SECURITY.md) for the trust model and [TESTING.md](TESTING.md) 
 - Failed or disconnected P2P routes fall back to the SFU and retry direct ICE
   with bounded backoff. Returning online also triggers a direct-route retry.
 - Every endpoint can load one or more local `.srt`/`.vtt` files, select its own
-  language track, and adjust its own subtitle offset. Subtitle files remain on
-  that device and are never uploaded.
+  language track, and adjust its own subtitle offset. v2.3.0 supersedes this
+  local-only workflow with the authenticated Room Caption Library.
 
 Endpoint subtitles are intentionally separate from the video. For a captured
 Tencent/streaming tab the cinema cannot read the third-party player's pause or
