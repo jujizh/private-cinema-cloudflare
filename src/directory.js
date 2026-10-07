@@ -10,9 +10,18 @@ export class CinemaDirectory {
     const rooms = (await this.ctx.storage.get("rooms")) || {};
 
     if (request.method === "GET") {
-      const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      let changed = false;
+      for (const [id, room] of Object.entries(rooms)) {
+        const staleEnded = room.status === "ended" && room.createdAt < cutoff;
+        const staleExpired = room.expiresAt < cutoff;
+        if (staleEnded || staleExpired) {
+          delete rooms[id];
+          changed = true;
+        }
+      }
+      if (changed) await this.ctx.storage.put("rooms", rooms);
       const items = Object.values(rooms)
-        .filter((room) => room.createdAt >= cutoff)
         .sort((a, b) => b.createdAt - a.createdAt)
         .slice(0, 50);
       return jsonResponse({ rooms: items });
@@ -31,6 +40,15 @@ export class CinemaDirectory {
       };
       const ordered = Object.values(rooms).sort((a, b) => b.createdAt - a.createdAt).slice(0, 100);
       await this.ctx.storage.put("rooms", Object.fromEntries(ordered.map((room) => [room.id, room])));
+      return jsonResponse({ ok: true });
+    }
+
+    if (request.method === "DELETE" && url.pathname === "/delete") {
+      const roomId = safeText(url.searchParams.get("id"), 80);
+      if (roomId && rooms[roomId]) {
+        delete rooms[roomId];
+        await this.ctx.storage.put("rooms", rooms);
+      }
       return jsonResponse({ ok: true });
     }
 

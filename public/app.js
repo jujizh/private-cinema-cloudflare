@@ -15,7 +15,7 @@ const ui = Object.fromEntries([
   "previewVideo", "stageEmpty", "stageKicker", "stageTitle", "stageHint", "liveBadge", "reactionLayer", "startShare",
   "stopShare", "openMovie", "movieFile", "qualitySelect", "pictureInPicture", "fullscreenButton", "shareTip",
   "peopleCount", "participants", "healthLabel", "routeValue", "transportValue", "bitrateValue", "latencyValue",
-  "lossValue", "resolutionValue", "frameDropsValue", "limitationValue", "hostDiagnostics", "diagnosticList", "chatLog", "chatForm", "chatInput",
+  "lossValue", "resolutionValue", "sourceValue", "availableBitrateValue", "frameDropsValue", "limitationValue", "hostDiagnostics", "diagnosticList", "chatLog", "chatForm", "chatInput",
   "inviteLabel", "inviteRole", "inviteHours", "createInvite", "inviteResult", "newInviteLink", "copyNewInvite",
   "inviteList", "endRoom", "toast", "busyOverlay", "captionOverlay", "captionSelect", "captionFile",
   "loadCaptions", "captionBack", "captionForward", "captionOffset",
@@ -249,15 +249,37 @@ async function loadRecentRooms() {
       details.textContent = `${room.status} · ${new Date(room.createdAt).toLocaleString()}`;
       copy.append(title, details);
       row.appendChild(copy);
+      const actions = document.createElement("div");
+      actions.className = "recent-room-actions";
       if (room.status !== "ended" && room.expiresAt > Date.now()) {
         const open = document.createElement("button");
         open.className = "text-button";
         open.textContent = "Open";
         open.addEventListener("click", () => resumeRoom(room.id));
-        row.appendChild(open);
+        actions.appendChild(open);
       }
+      const remove = document.createElement("button");
+      remove.className = "text-button delete-room-button";
+      remove.textContent = "Delete";
+      remove.addEventListener("click", () => deleteRecentRoom(room));
+      actions.appendChild(remove);
+      row.appendChild(actions);
       ui.recentRooms.appendChild(row);
     }
+  } catch (error) {
+    ui.dashboardError.textContent = error.message;
+  }
+}
+
+async function deleteRecentRoom(room) {
+  const warning = room.status === "ended"
+    ? `Delete the history for “${room.title}”?`
+    : `Delete “${room.title}”? Its invitations will stop working and anyone inside will be disconnected.`;
+  if (!confirm(warning)) return;
+  try {
+    await api(`/api/admin/rooms/${room.id}`, { method: "DELETE" });
+    await loadRecentRooms();
+    toast("Room deleted");
   } catch (error) {
     ui.dashboardError.textContent = error.message;
   }
@@ -595,12 +617,20 @@ async function startHostDirectPeer(viewerId) {
     const profile = qualityProfile();
     const transceivers = state.localStream.getTracks().map((track) => {
       const init = { direction: "sendonly", streams: [state.localStream] };
-      if (track.kind === "video") init.sendEncodings = [{ maxBitrate: profile.bitrate, maxFramerate: 30 }];
+      if (track.kind === "video") {
+        init.sendEncodings = [{
+          scaleResolutionDownBy: 1,
+          maxBitrate: profile.bitrate,
+          maxFramerate: 30,
+          priority: "high",
+          networkPriority: "high",
+        }];
+      }
       const transceiver = pc.addTransceiver(track, init);
       if (track.kind === "video") preferH264ForDirectPlayback(transceiver);
       return transceiver;
     });
-    await Promise.all(transceivers.map(({ sender }) => preferMotionOverResolution(sender)));
+    await Promise.all(transceivers.map(({ sender }) => preferResolutionForDirect(sender, profile)));
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await waitForIceGathering(pc);
@@ -964,6 +994,27 @@ async function preferMotionOverResolution(sender) {
   } catch (error) {
     // Safari and some older Chromium builds do not expose this sender option.
     console.info("Frame-rate preference is not supported by this browser", error);
+  }
+}
+
+async function preferResolutionForDirect(sender, profile) {
+  if (!sender?.track || sender.track.kind !== "video") return;
+  try {
+    const parameters = sender.getParameters();
+    parameters.degradationPreference = "maintain-resolution";
+    parameters.encodings = (parameters.encodings || [{}]).map((encoding) => ({
+      ...encoding,
+      scaleResolutionDownBy: 1,
+      maxBitrate: profile.bitrate,
+      maxFramerate: 30,
+      priority: "high",
+      networkPriority: "high",
+    }));
+    await sender.setParameters(parameters);
+  } catch (error) {
+    // Unsupported hints are non-fatal. The explicit single full-resolution
+    // encoding still prevents the app itself from selecting a low layer.
+    console.info("Resolution preference is not supported by this browser", error);
   }
 }
 
@@ -1457,6 +1508,12 @@ async function collectStats() {
       packetCount,
       packetsLost: lost,
     });
+    const sourceSettings = state.role === "host"
+      ? state.localStream?.getVideoTracks?.()[0]?.getSettings?.() || {}
+      : {};
+    const availableBitrateKbps = Math.round(Number(
+      state.role === "host" ? pair?.availableOutgoingBitrate : pair?.availableIncomingBitrate,
+    ) / 1000) || 0;
     const quality = {
       state: healthState({
         packetLoss,
@@ -1479,6 +1536,10 @@ async function collectStats() {
       framesDropped,
       qualityLimitationReason,
       codec,
+      sourceWidth: Number(sourceSettings.width) || 0,
+      sourceHeight: Number(sourceSettings.height) || 0,
+      sourceFps: Math.round(Number(sourceSettings.frameRate) || 0),
+      availableBitrateKbps,
     };
     updateNetworkPanel(quality);
     sendSocket({ type: "quality:report", quality });
@@ -1513,6 +1574,12 @@ function updateNetworkPanel(quality) {
     ? `${quality.width}×${quality.height} · ${quality.fps} fps${quality.codec ? ` · ${quality.codec}` : ""}`
     : "—";
   ui.frameDropsValue.textContent = Number.isFinite(quality.framesDropped) ? `${quality.framesDropped} / 5s` : "—";
+  ui.sourceValue.textContent = quality.sourceWidth
+    ? `${quality.sourceWidth}x${quality.sourceHeight}${quality.sourceFps ? ` · ${quality.sourceFps} fps` : ""}`
+    : "-";
+  ui.availableBitrateValue.textContent = quality.availableBitrateKbps
+    ? `${quality.availableBitrateKbps} kbps`
+    : "-";
   ui.limitationValue.textContent = quality.qualityLimitationReason && quality.qualityLimitationReason !== "none"
     ? quality.qualityLimitationReason === "receiver" ? "Receiver" : quality.qualityLimitationReason
     : "None";

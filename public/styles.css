@@ -3,6 +3,7 @@
   --text:#f7f4ee;--muted:#9b9aa4;--gold:#f0c782;--rose:#e64d78;--violet:#8b5cf6;
   --green:#45d79c;--red:#ff6b7b;--shadow:0 30px 80px rgba(0,0,0,.45)
 }
+.recent-room{align-items:center}.recent-room-actions{display:flex;align-items:center;gap:8px;flex:none}.delete-room-button{color:#e9859a}
 *{box-sizing:border-box}
 html{min-height:100%;background:var(--bg);color-scheme:dark}
 body{min-height:100vh;margin:0;color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;overflow-x:hidden}

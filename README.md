@@ -68,6 +68,18 @@ No permanent credential belongs in the repository. Put every secret in Cloudflar
 
 See [SECURITY.md](SECURITY.md) for the trust model and [TESTING.md](TESTING.md) for the pre-release checklist.
 
+## v2.2.3 quality-first direct media and room cleanup
+
+- Direct P2P now requests a single full-resolution encoding and uses
+  `maintain-resolution`, so WebRTC bandwidth ramp-up should reduce motion or
+  compression before shrinking a film to 270p.
+- Stream diagnostics distinguish the captured source from the encoded output
+  and show the browser's estimated available bandwidth.
+- The owner dashboard can permanently delete any room. Deleting an active room
+  disconnects its participants and invalidates its invitations.
+- Ended/expired room history is pruned after seven days, and newly-created room
+  Durable Object state is automatically purged after the same retention window.
+
 ## v2.2.2 direct-first media and endpoint subtitles
 
 - Up to three viewers use separate direct P2P fast paths. A fourth viewer

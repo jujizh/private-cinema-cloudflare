@@ -10,6 +10,7 @@ import {
 import { createRealtimeSession, generateIceServers, realtimeRequest } from "./sfu.js";
 
 const textDecoder = new TextDecoder();
+const ROOM_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const ALLOWED_REACTIONS = new Set(["❤️", "😂", "🥹", "😍", "👏", "🔥"]);
 
 function claimsFromRequest(request) {
@@ -44,6 +45,7 @@ export class CinemaRoom {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/internal/create" && request.method === "POST") return this.createRoom(request);
+      if (url.pathname === "/internal/delete" && request.method === "DELETE") return this.deleteRoom(request);
       if (url.pathname === "/internal/ticket" && request.method === "POST") return this.createTicket(request);
       if (url.pathname === "/internal/ws") return this.openSocket(request);
       if (url.pathname === "/internal/status" && request.method === "GET") return this.getStatus(request);
@@ -99,6 +101,40 @@ export class CinemaRoom {
     });
   }
 
+  async directoryDelete(roomId) {
+    if (!roomId || !this.env.DIRECTORY) return;
+    const id = this.env.DIRECTORY.idFromName("main");
+    const stub = this.env.DIRECTORY.get(id);
+    await stub.fetch(`https://directory/delete?id=${encodeURIComponent(roomId)}`, { method: "DELETE" });
+  }
+
+  async deleteRoom(request) {
+    const claims = claimsFromRequest(request);
+    if (claims?.role !== "owner") throw new HttpError(403, "Owner access required", "forbidden");
+    await this.purgeRoom(this.room?.id || claims.room, "Screening deleted");
+    return jsonResponse({ ok: true });
+  }
+
+  async purgeRoom(roomId, reason = "Screening expired") {
+    if (this.room) {
+      try { await this.stopMedia(null, true); } catch {}
+      this.broadcast({ type: "room:ended" });
+      for (const socket of this.ctx.getWebSockets()) {
+        try { socket.close(4004, reason); } catch {}
+      }
+    }
+    await this.directoryDelete(roomId);
+    await this.ctx.storage.deleteAll();
+    this.room = null;
+  }
+
+  async scheduleNextAlarm() {
+    if (!this.room) return;
+    const deadlines = [this.room.publisherDisconnect?.deadline, this.room.cleanupAt]
+      .filter((value) => Number(value) > Date.now());
+    if (deadlines.length) await this.ctx.storage.setAlarm(Math.min(...deadlines));
+  }
+
   async createRoom(request) {
     if (this.room && !this.room.endedAt && this.room.expiresAt > Date.now()) {
       throw new HttpError(409, "Room already exists", "room_exists");
@@ -114,6 +150,7 @@ export class CinemaRoom {
       title: safeText(body.title, 100) || "Private screening",
       createdAt: now,
       expiresAt: now + hours * 60 * 60 * 1000,
+      cleanupAt: now + hours * 60 * 60 * 1000 + ROOM_RETENTION_MS,
       endedAt: null,
       locked: false,
       invites: {},
@@ -126,6 +163,7 @@ export class CinemaRoom {
     const viewer = await this.issueInvite("viewer", "Guests", hours);
     await this.persist();
     await this.directoryUpdate();
+    await this.scheduleNextAlarm();
     return jsonResponse({ room: this.publicState(), host, viewer });
   }
 
@@ -455,7 +493,7 @@ export class CinemaRoom {
         const deadline = Date.now() + 30_000;
         this.room.publisherDisconnect = { clientId: meta.clientId, deadline };
         await this.persist();
-        await this.ctx.storage.setAlarm(deadline);
+        await this.scheduleNextAlarm();
       } else {
         await this.ctx.storage.delete(`session:${meta.clientId}`);
         await this.ctx.storage.delete(`turn:${meta.clientId}`);
@@ -471,21 +509,28 @@ export class CinemaRoom {
 
   async alarm() {
     await this.ready;
+    if (!this.room) return;
+    if (this.room.cleanupAt && this.room.cleanupAt <= Date.now()) {
+      await this.purgeRoom(this.room.id);
+      return;
+    }
     const pending = this.room?.publisherDisconnect;
     if (!pending || pending.deadline > Date.now()) {
-      if (pending) await this.ctx.storage.setAlarm(pending.deadline);
+      await this.scheduleNextAlarm();
       return;
     }
     const returned = this.ctx.getWebSockets().some((socket) => socketMeta(socket)?.clientId === pending.clientId);
     if (returned) {
       this.room.publisherDisconnect = null;
       await this.persist();
+      await this.scheduleNextAlarm();
       return;
     }
     this.room.publisherDisconnect = null;
     await this.ctx.storage.delete(`session:${pending.clientId}`);
     await this.ctx.storage.delete(`turn:${pending.clientId}`);
     await this.stopMedia(pending.clientId, true);
+    await this.scheduleNextAlarm();
   }
 
   broadcast(payload, exceptId = null) {
@@ -573,12 +618,14 @@ export class CinemaRoom {
     if (action === "end" && request.method === "POST") {
       await this.stopMedia(null, true);
       this.room.endedAt = Date.now();
+      this.room.cleanupAt = Date.now() + ROOM_RETENTION_MS;
       await this.persist();
       this.broadcast({ type: "room:ended" });
       for (const socket of this.ctx.getWebSockets()) {
         try { socket.close(4004, "Screening ended"); } catch {}
       }
       await this.directoryUpdate();
+      await this.scheduleNextAlarm();
       return jsonResponse({ ok: true });
     }
     throw new HttpError(404, "Unknown control action", "not_found");

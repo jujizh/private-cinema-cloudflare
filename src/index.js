@@ -128,7 +128,7 @@ async function routeApi(request, env) {
 
   if (url.pathname === "/api/config" && request.method === "GET") {
     return jsonResponse({
-      version: "2.1.0",
+      version: "2.2.3",
       realtimeConfigured: realtimeConfigured(env),
       turnConfigured: Boolean(env.TURN_KEY_ID && env.TURN_KEY_API_TOKEN),
       ownerConfigured: Boolean(env.ADMIN_PASSWORD && env.APP_AUTH_SECRET?.length >= 32),
@@ -192,6 +192,13 @@ async function routeApi(request, env) {
         expiresInHours: Math.max(1, Math.min(168, Number(body.expiresInHours) || 24)),
       }),
     });
+  }
+
+  const adminRoomMatch = url.pathname.match(/^\/api\/admin\/rooms\/([A-Za-z0-9_-]{16,80})$/);
+  if (adminRoomMatch && request.method === "DELETE") {
+    const [, roomId] = adminRoomMatch;
+    await requireAdmin(request, env);
+    return forwardRoomRequest(request, env, roomId, "/internal/delete", { allowAdmin: true });
   }
 
   const roomMatch = url.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{16,80})\/(.+)$/);

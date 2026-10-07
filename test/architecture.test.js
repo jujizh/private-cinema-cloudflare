@@ -26,15 +26,30 @@ test("chat history has a fixed panel and its own scrollbar", async () => {
   assert.match(app, /ui\.chatLog\.scrollTop = ui\.chatLog\.scrollHeight/);
 });
 
-test("cinema publishing prioritizes motion and enforces a watchable SFU quality floor", async () => {
+test("direct cinema publishing preserves resolution while SFU keeps a watchable quality floor", async () => {
   const [app, room] = await Promise.all([read("public/app.js"), read("src/room.js")]);
   assert.match(app, /contentHint = "motion"/);
   assert.match(app, /degradationPreference = "maintain-framerate"/);
+  assert.match(app, /degradationPreference = "maintain-resolution"/);
+  assert.match(app, /preferResolutionForDirect/);
+  assert.match(app, /scaleResolutionDownBy: 1/);
   assert.match(app, /function cinemaSfuEncodings/);
   assert.match(app, /rid: "m"[\s\S]*maxBitrate: 2_200_000/);
   assert.doesNotMatch(app, /rid: "z"/);
   assert.match(room, /quality === "high"[\s\S]*preferredRid: "a"[\s\S]*priorityOrdering: "asciibetical"/);
   assert.doesNotMatch(room, /quality === "high"[^\n]*priorityOrdering: "none"/);
+});
+
+test("owner can purge room state and stale history is pruned", async () => {
+  const [worker, room, directory, app] = await Promise.all([
+    read("src/index.js"), read("src/room.js"), read("src/directory.js"), read("public/app.js"),
+  ]);
+  assert.match(worker, /adminRoomMatch/);
+  assert.match(room, /async deleteRoom\(request\)/);
+  assert.match(room, /storage\.deleteAll\(\)/);
+  assert.match(directory, /request\.method === "DELETE"/);
+  assert.match(directory, /7 \* 24 \* 60 \* 60 \* 1000/);
+  assert.match(app, /deleteRecentRoom/);
 });
 
 test("TURN credential request uses Cloudflare's documented body", async () => {
