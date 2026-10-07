@@ -1,5 +1,11 @@
 const $ = (id) => document.getElementById(id);
+// Small private rooms prefer direct media because it has performed better than
+// the current SFU route in real-world testing. The Host sends one encoded copy
+// per viewer, so larger rooms still switch to SFU fan-out.
 const MAX_DIRECT_VIEWERS = 3;
+const HEARTBEAT_INTERVAL_MS = 25_000;
+const DIRECT_DISCONNECT_GRACE_MS = 6_000;
+const DIRECT_RETRY_DELAYS_MS = [3_000, 8_000, 15_000, 30_000, 60_000];
 
 const ui = Object.fromEntries([
   "connectionPill", "connectionText", "entryView", "inviteEntry", "ownerEntry", "ownerDashboard", "closedEntry",
@@ -11,7 +17,8 @@ const ui = Object.fromEntries([
   "peopleCount", "participants", "healthLabel", "routeValue", "transportValue", "bitrateValue", "latencyValue",
   "lossValue", "resolutionValue", "frameDropsValue", "limitationValue", "hostDiagnostics", "diagnosticList", "chatLog", "chatForm", "chatInput",
   "inviteLabel", "inviteRole", "inviteHours", "createInvite", "inviteResult", "newInviteLink", "copyNewInvite",
-  "inviteList", "endRoom", "toast", "busyOverlay",
+  "inviteList", "endRoom", "toast", "busyOverlay", "captionOverlay", "captionSelect", "captionFile",
+  "loadCaptions", "captionBack", "captionForward", "captionOffset",
 ].map((id) => [id, $(id)]));
 
 const state = {
@@ -45,6 +52,14 @@ const state = {
   directPc: null,
   directStream: null,
   directFallbackTimers: new Map(),
+  directRetryTimers: new Map(),
+  directRetryAttempts: new Map(),
+  directDisconnectTimers: new Map(),
+  directPresenceTimers: new Map(),
+  heartbeatTimer: null,
+  captionTracks: [],
+  captionOffsetSeconds: 0,
+  captionTimer: null,
 };
 
 function getClientId() {
@@ -337,6 +352,7 @@ async function connectToRoom(isReconnect = false) {
 
   state.connected = true;
   state.reconnectAttempt = 0;
+  startHeartbeat();
   setConnection("Connected", "online");
   if (!isReconnect) showCinema();
 }
@@ -344,17 +360,32 @@ async function connectToRoom(isReconnect = false) {
 function handleSocketClose(event, socket) {
   if (state.ws !== socket) return;
   state.connected = false;
-  setConnection("Disconnected", "warn");
-  stopStats();
-  closeAllDirectConnections(false);
-  closePeerConnection();
-  if (state.localStream) stopBroadcast(false);
+  stopHeartbeat();
+  // The room WebSocket is control/signalling only. A brief control-plane
+  // interruption must not tear down a healthy SFU/P2P movie connection or stop
+  // the browser's screen-capture permission.
+  setConnection("Control connection interrupted; media may continue", "warn");
   if (state.intentionalClose || [4003, 4004].includes(event.code)) {
     if (event.code === 4003) showClosed("Your access to this screening was removed.");
     if (event.code === 4004) showClosed("This screening has ended.");
     return;
   }
   scheduleReconnect();
+}
+
+function startHeartbeat() {
+  stopHeartbeat();
+  state.heartbeatTimer = setInterval(() => {
+    sendSocket({ type: "ping", at: Date.now() });
+    // This doubles as a small-room route watchdog. A failed direct attempt is
+    // retried even if room presence does not otherwise change.
+    if (state.role === "host") reconcileDirectRoute();
+  }, HEARTBEAT_INTERVAL_MS);
+}
+
+function stopHeartbeat() {
+  if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
+  state.heartbeatTimer = null;
 }
 
 function scheduleReconnect() {
@@ -385,6 +416,7 @@ function showCinema() {
 function handleSocketMessage(raw) {
   let message;
   try { message = JSON.parse(raw); } catch { return; }
+  if (message.type === "pong") return;
   if (message.eventId) {
     if (state.seenEvents.has(message.eventId)) return;
     state.seenEvents.add(message.eventId);
@@ -416,7 +448,10 @@ function handleSocketMessage(raw) {
   }
   if (message.type === "peer:reconnected") {
     systemMessage(`${message.peer.name} reconnected.`);
-    resetHostDirectPeer(message.peer.id);
+    // Reconnecting the control socket does not invalidate an already healthy
+    // media PeerConnection. Presence reconciliation will create a new route
+    // only when one is actually missing.
+    reconcileDirectRoute();
   }
   if (message.type === "peer:left") systemMessage(`${message.peer.name} left.`);
   if (message.type === "chat") addChatMessage(message);
@@ -463,30 +498,79 @@ function clearDirectFallbackTimer(viewerId) {
   state.directFallbackTimers.delete(viewerId);
 }
 
+function clearDirectDisconnectTimer(viewerId) {
+  const timer = state.directDisconnectTimers.get(viewerId);
+  if (timer) clearTimeout(timer);
+  state.directDisconnectTimers.delete(viewerId);
+}
+
+function clearDirectRetryTimer(viewerId, resetAttempt = false) {
+  const timer = state.directRetryTimers.get(viewerId);
+  if (timer) clearTimeout(timer);
+  state.directRetryTimers.delete(viewerId);
+  if (resetAttempt) state.directRetryAttempts.delete(viewerId);
+}
+
+function clearDirectPresenceTimer(viewerId) {
+  const timer = state.directPresenceTimers.get(viewerId);
+  if (timer) clearTimeout(timer);
+  state.directPresenceTimers.delete(viewerId);
+}
+
+function scheduleDirectRetry(viewerId) {
+  if (state.role !== "host" || !state.localStream || !directFanoutAvailable() || !directViewerIds().includes(viewerId)) return;
+  if (state.directPeers.has(viewerId) || state.directRetryTimers.has(viewerId)) return;
+  const attempt = state.directRetryAttempts.get(viewerId) || 0;
+  const delay = DIRECT_RETRY_DELAYS_MS[Math.min(attempt, DIRECT_RETRY_DELAYS_MS.length - 1)];
+  state.directRetryAttempts.set(viewerId, attempt + 1);
+  state.directRetryTimers.set(viewerId, setTimeout(() => {
+    state.directRetryTimers.delete(viewerId);
+    startHostDirectPeer(viewerId);
+  }, delay));
+}
+
 function resetHostDirectPeer(viewerId) {
   if (state.role !== "host") return;
   const pc = state.directPeers.get(viewerId);
   if (!pc) return;
   state.directPeers.delete(viewerId);
   clearDirectFallbackTimer(viewerId);
+  clearDirectDisconnectTimer(viewerId);
+  clearDirectPresenceTimer(viewerId);
   try { pc.close(); } catch {}
 }
 
 function configureDirectPeer(pc, targetId) {
   pc.addEventListener("connectionstatechange", () => {
     if (pc.connectionState === "connected") {
+      clearDirectDisconnectTimer(targetId);
+      clearDirectRetryTimer(targetId, true);
       if (state.role === "viewer" && state.directPc === pc) activateDirectViewer(pc);
       if (state.role === "host" && state.directPeers.get(targetId) === pc) {
         clearDirectFallbackTimer(targetId);
         toast("Direct small-room route connected");
       }
     }
+    if (pc.connectionState === "disconnected") {
+      clearDirectDisconnectTimer(targetId);
+      state.directDisconnectTimers.set(targetId, setTimeout(() => {
+        if (pc.connectionState !== "disconnected") return;
+        if (state.role === "host" && state.directPeers.get(targetId) === pc) {
+          state.directPeers.delete(targetId);
+          try { pc.close(); } catch {}
+          scheduleDirectRetry(targetId);
+        }
+        if (state.role === "viewer" && state.directPc === pc) fallbackFromDirect(pc, targetId);
+      }, DIRECT_DISCONNECT_GRACE_MS));
+    }
     if (["failed", "closed"].includes(pc.connectionState)) {
+      clearDirectDisconnectTimer(targetId);
       if (state.role === "host" && state.directPeers.get(targetId) === pc) {
         clearDirectFallbackTimer(targetId);
         state.directPeers.delete(targetId);
+        scheduleDirectRetry(targetId);
       }
-      if (state.role === "viewer" && state.directPc === pc) fallbackFromDirect(pc);
+      if (state.role === "viewer" && state.directPc === pc) fallbackFromDirect(pc, targetId);
     }
   });
 }
@@ -521,6 +605,7 @@ async function startHostDirectPeer(viewerId) {
         pc.close();
         state.directPeers.delete(viewerId);
         state.directFallbackTimers.delete(viewerId);
+        scheduleDirectRetry(viewerId);
       }
     }, 15_000);
     state.directFallbackTimers.set(viewerId, timer);
@@ -529,6 +614,7 @@ async function startHostDirectPeer(viewerId) {
     const pc = state.directPeers.get(viewerId);
     if (pc) pc.close();
     state.directPeers.delete(viewerId);
+    scheduleDirectRetry(viewerId);
   }
 }
 
@@ -573,6 +659,10 @@ async function handleDirectSignal(message) {
       return;
     }
     if (signal.kind === "hangup" && state.role === "viewer") closeViewerDirect(true);
+    if (signal.kind === "retry" && state.role === "host") {
+      resetHostDirectPeer(from);
+      scheduleDirectRetry(from);
+    }
   } catch (error) {
     console.warn("Ignored invalid direct-media signal", error);
   }
@@ -595,10 +685,11 @@ function activateDirectViewer(pc) {
   startStats();
 }
 
-function fallbackFromDirect(pc) {
+function fallbackFromDirect(pc, hostId = "") {
   if (state.directPc !== pc) return;
   closeViewerDirect(false);
   if (state.media && !state.subscriptionPending) subscribeToBroadcast();
+  if (hostId) sendSocket({ type: "p2p:signal", to: hostId, signal: { kind: "retry" } });
 }
 
 function closeViewerDirect(useFallback = true) {
@@ -617,6 +708,13 @@ function closeViewerDirect(useFallback = true) {
 function closeAllDirectConnections(notifyPeers = true) {
   for (const timer of state.directFallbackTimers.values()) clearTimeout(timer);
   state.directFallbackTimers.clear();
+  for (const timer of state.directRetryTimers.values()) clearTimeout(timer);
+  state.directRetryTimers.clear();
+  state.directRetryAttempts.clear();
+  for (const timer of state.directDisconnectTimers.values()) clearTimeout(timer);
+  state.directDisconnectTimers.clear();
+  for (const timer of state.directPresenceTimers.values()) clearTimeout(timer);
+  state.directPresenceTimers.clear();
   if (state.role === "host") {
     const peers = [...state.directPeers.entries()];
     state.directPeers.clear();
@@ -632,8 +730,27 @@ function closeAllDirectConnections(notifyPeers = true) {
 function reconcileDirectRoute() {
   const viewerIds = directViewerIds();
   if (state.role === "host") {
-    if (!state.localStream || !directFanoutAvailable()) {
+    if (!state.localStream) {
       closeAllDirectConnections(true);
+      return;
+    }
+    if (viewerIds.length > MAX_DIRECT_VIEWERS) {
+      closeAllDirectConnections(true);
+      return;
+    }
+    // A control WebSocket can disappear briefly while its independent media
+    // PeerConnection is still healthy. Keep that direct route for 30 seconds so
+    // a ticket reconnect does not cause an avoidable movie interruption.
+    if (viewerIds.length === 0) {
+      for (const [viewerId, pc] of state.directPeers) {
+        if (state.directPresenceTimers.has(viewerId)) continue;
+        state.directPresenceTimers.set(viewerId, setTimeout(() => {
+          state.directPresenceTimers.delete(viewerId);
+          if (directViewerIds().includes(viewerId) || state.directPeers.get(viewerId) !== pc) return;
+          state.directPeers.delete(viewerId);
+          try { pc.close(); } catch {}
+        }, 30_000));
+      }
       return;
     }
     for (const [viewerId, pc] of state.directPeers) {
@@ -641,6 +758,8 @@ function reconcileDirectRoute() {
         try { pc.close(); } catch {}
         clearDirectFallbackTimer(viewerId);
         state.directPeers.delete(viewerId);
+      } else {
+        clearDirectPresenceTimer(viewerId);
       }
     }
     for (const viewerId of viewerIds) startHostDirectPeer(viewerId);
@@ -1056,6 +1175,108 @@ function launchMovieFile() {
   ui.movieFile.value = "";
 }
 
+function parseCaptionTime(value) {
+  const parts = String(value || "").trim().replace(",", ".").split(":").map(Number);
+  if (parts.some((part) => !Number.isFinite(part))) return NaN;
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return NaN;
+}
+
+function plainCaptionText(value) {
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = String(value || "").replace(/<br\s*\/?>/gi, "\n");
+  return wrapper.textContent?.trim() || "";
+}
+
+function parseCaptionFile(source) {
+  const blocks = String(source || "")
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/^WEBVTT[^\n]*\n+/i, "")
+    .split(/\n{2,}/);
+  const cues = [];
+  for (const block of blocks) {
+    const lines = block.split("\n").map((line) => line.trimEnd());
+    const timingIndex = lines.findIndex((line) => line.includes("-->"));
+    if (timingIndex < 0) continue;
+    const [startText, endPart] = lines[timingIndex].split("-->");
+    const endText = endPart?.trim().split(/\s+/)[0];
+    const start = parseCaptionTime(startText);
+    const end = parseCaptionTime(endText);
+    const text = plainCaptionText(lines.slice(timingIndex + 1).join("\n"));
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start && text) cues.push({ start, end, text });
+  }
+  return cues.sort((left, right) => left.start - right.start);
+}
+
+async function loadCaptionFiles() {
+  const files = [...(ui.captionFile.files || [])];
+  for (const file of files) {
+    if (file.size > 3 * 1024 * 1024) {
+      toast(`${file.name} is too large`);
+      continue;
+    }
+    const cues = parseCaptionFile(await file.text());
+    if (!cues.length) {
+      toast(`No timed captions found in ${file.name}`);
+      continue;
+    }
+    const id = crypto.randomUUID();
+    state.captionTracks.push({ id, name: file.name.replace(/\.(srt|vtt)$/i, ""), cues });
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = file.name.replace(/\.(srt|vtt)$/i, "");
+    ui.captionSelect.appendChild(option);
+    ui.captionSelect.value = id;
+    toast(`${cues.length} subtitle cues loaded locally`);
+  }
+  ui.captionFile.value = "";
+  startCaptionRenderer();
+  renderCaption();
+}
+
+function activePlaybackVideo() {
+  return state.role === "host" ? ui.previewVideo : ui.remoteVideo;
+}
+
+function cueAtTime(cues, time) {
+  let low = 0;
+  let high = cues.length - 1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    const cue = cues[middle];
+    if (time < cue.start) high = middle - 1;
+    else if (time > cue.end) low = middle + 1;
+    else return cue;
+  }
+  return null;
+}
+
+function renderCaption() {
+  const track = state.captionTracks.find((item) => item.id === ui.captionSelect.value);
+  const video = activePlaybackVideo();
+  if (!track || !video?.srcObject) {
+    ui.captionOverlay.textContent = "";
+    setVisible(ui.captionOverlay, false);
+    return;
+  }
+  const cue = cueAtTime(track.cues, Math.max(0, Number(video.currentTime || 0) + state.captionOffsetSeconds));
+  ui.captionOverlay.textContent = cue?.text || "";
+  setVisible(ui.captionOverlay, Boolean(cue?.text));
+}
+
+function startCaptionRenderer() {
+  if (state.captionTimer) return;
+  state.captionTimer = setInterval(renderCaption, 150);
+}
+
+function adjustCaptionOffset(delta) {
+  state.captionOffsetSeconds = Math.max(-3600, Math.min(3600, state.captionOffsetSeconds + delta));
+  ui.captionOffset.textContent = `${state.captionOffsetSeconds.toFixed(1)}s`;
+  renderCaption();
+}
+
 function startStats() {
   stopStats();
   collectStats();
@@ -1335,6 +1556,11 @@ function bindEvents() {
   ui.stopShare.addEventListener("click", () => stopBroadcast(true));
   ui.openMovie.addEventListener("click", openLocalMovie);
   ui.movieFile.addEventListener("change", launchMovieFile);
+  ui.loadCaptions.addEventListener("click", () => ui.captionFile.click());
+  ui.captionFile.addEventListener("change", loadCaptionFiles);
+  ui.captionSelect.addEventListener("change", renderCaption);
+  ui.captionBack.addEventListener("click", () => adjustCaptionOffset(-1));
+  ui.captionForward.addEventListener("click", () => adjustCaptionOffset(1));
   ui.fullscreenButton.addEventListener("click", () => ui.stage.requestFullscreen?.());
   ui.pictureInPicture.addEventListener("click", async () => {
     const video = state.role === "host" ? ui.previewVideo : ui.remoteVideo;
@@ -1363,6 +1589,13 @@ function bindEvents() {
     state.previousRtp.clear();
     if (state.pc) collectStats();
     if (state.localStream && !state.wakeLock) requestWakeLock();
+  });
+  window.addEventListener("online", () => {
+    if (state.role === "host") reconcileDirectRoute();
+    else if (state.directPc && state.directPc.connectionState !== "connected") {
+      const host = state.participants.find((participant) => participant.role === "host");
+      if (host) sendSocket({ type: "p2p:signal", to: host.id, signal: { kind: "retry" } });
+    }
   });
 }
 

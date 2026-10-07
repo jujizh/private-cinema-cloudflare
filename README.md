@@ -68,6 +68,25 @@ No permanent credential belongs in the repository. Put every secret in Cloudflar
 
 See [SECURITY.md](SECURITY.md) for the trust model and [TESTING.md](TESTING.md) for the pre-release checklist.
 
+## v2.2.1 resilient private route and endpoint subtitles
+
+- Up to three viewers use separate direct P2P fast paths. A fourth viewer
+  switches the room to SFU fan-out so Host upload does not grow without bound.
+- The control WebSocket now sends a heartbeat. Losing that control connection
+  briefly no longer stops screen capture or immediately tears down healthy
+  media; the server grants the broadcaster a 30-second reconnect window.
+- Failed or disconnected P2P routes fall back to the SFU and retry direct ICE
+  with bounded backoff. Returning online also triggers a direct-route retry.
+- Every endpoint can load one or more local `.srt`/`.vtt` files, select its own
+  language track, and adjust its own subtitle offset. Subtitle files remain on
+  that device and are never uploaded.
+
+Endpoint subtitles are intentionally separate from the video. For a captured
+Tencent/streaming tab the cinema cannot read the third-party player's pause or
+seek position, so use the ±1 second offset controls and avoid seeking after
+alignment. A later caption service can publish timestamped speech-to-text and
+translations over the room control channel without changing the media route.
+
 ## v2.1.1 small-room routing and reconnection
 
 - Up to three viewers can now receive separate direct WebRTC connections from

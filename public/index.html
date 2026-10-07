@@ -128,6 +128,7 @@
             </div>
             <div id="liveBadge" class="live-badge hidden"><span></span> LIVE</div>
             <div id="reactionLayer" class="reaction-layer" aria-hidden="true"></div>
+            <div id="captionOverlay" class="caption-overlay hidden" aria-live="polite"></div>
           </div>
 
           <div class="stage-controls">
@@ -148,6 +149,16 @@
               </label>
               <button id="pictureInPicture" class="icon-button" title="Picture in picture" aria-label="Picture in picture">▣</button>
               <button id="fullscreenButton" class="icon-button" title="Fullscreen" aria-label="Fullscreen">⛶</button>
+            </div>
+            <div class="control-group caption-controls">
+              <label class="quality-control">Subtitles
+                <select id="captionSelect"><option value="off">Off</option></select>
+              </label>
+              <button id="loadCaptions" class="button button-soft">Load SRT/VTT</button>
+              <input id="captionFile" class="visually-hidden" type="file" accept=".srt,.vtt,text/vtt,application/x-subrip" multiple>
+              <button id="captionBack" class="icon-button" title="Subtitles 1 second earlier" aria-label="Subtitles 1 second earlier">−1s</button>
+              <span id="captionOffset" class="caption-offset">0.0s</span>
+              <button id="captionForward" class="icon-button" title="Subtitles 1 second later" aria-label="Subtitles 1 second later">+1s</button>
             </div>
           </div>
           <div id="shareTip" class="share-tip host-only">For the clearest sound, play the video in Chrome or Edge, share that tab, and turn on <strong>Share tab audio</strong>.</div>

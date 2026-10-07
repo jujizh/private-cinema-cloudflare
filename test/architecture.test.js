@@ -60,11 +60,14 @@ test("small rooms get direct P2P fan-out with SFU fallback", async () => {
   assert.match(app, /for \(const viewerId of viewerIds\) startHostDirectPeer\(viewerId\)/);
   assert.match(app, /Direct P2P/);
   assert.match(app, /P2P via TURN/);
-  assert.match(app, /directHostPc \|\| state\.pc/);
+  assert.match(app, /directPeers\.values/);
   assert.match(app, /preferH264ForDirectPlayback/);
   assert.match(app, /state\.media && !state\.subscriptionPending\) subscribeToBroadcast/);
   assert.match(room, /data\.type === "p2p:signal"/);
   assert.match(room, /Only host-to-viewer or viewer-to-host/);
+  assert.match(app, /scheduleDirectRetry/);
+  assert.match(app, /signal: \{ kind: "retry" \}/);
+  assert.match(room, /"hangup", "retry"/);
 });
 
 test("network reconnects preserve logical participant identity", async () => {
@@ -76,6 +79,20 @@ test("network reconnects preserve logical participant identity", async () => {
   assert.match(room, /peer:reconnected/);
   assert.match(room, /latestByClient/);
   assert.match(app, /resetHostDirectPeer/);
+  assert.match(app, /type: "ping"/);
+  assert.match(room, /type: "pong"/);
+  assert.match(room, /publisherDisconnect/);
+  assert.match(room, /async alarm\(\)/);
+});
+
+test("each endpoint can load local SRT or VTT subtitle tracks", async () => {
+  const [app, html, styles] = await Promise.all([read("public/app.js"), read("public/index.html"), read("public/styles.css")]);
+  assert.match(html, /id="captionFile"[^>]*\.srt,.vtt/);
+  assert.match(html, /id="captionSelect"/);
+  assert.match(app, /function parseCaptionFile/);
+  assert.match(app, /function cueAtTime/);
+  assert.match(app, /textContent = cue\?\.text/);
+  assert.match(styles, /\.caption-overlay/);
 });
 
 test("server enforces invitations and host publishing", async () => {

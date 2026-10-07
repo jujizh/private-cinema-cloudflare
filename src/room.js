@@ -228,6 +228,11 @@ export class CinemaRoom {
     await this.ctx.storage.delete(`ticket:${ticketId}`);
     this.assertClaim(ticket.claims);
 
+    if (this.room.publisherDisconnect?.clientId === ticket.clientId) {
+      this.room.publisherDisconnect = null;
+      await this.persist();
+    }
+
     let replacingConnection = false;
     for (const oldSocket of this.ctx.getWebSockets()) {
       const old = socketMeta(oldSocket);
@@ -327,6 +332,11 @@ export class CinemaRoom {
       return;
     }
 
+    if (data.type === "ping") {
+      try { socket.send(JSON.stringify({ type: "pong", at: Number(data.at) || Date.now() })); } catch {}
+      return;
+    }
+
     if (data.type === "chat") {
       if (!this.consumeSocketRate(socket, meta, "chat", 8, 10_000)) return;
       const text = safeText(data.text, 1200);
@@ -355,7 +365,7 @@ export class CinemaRoom {
       if (!this.consumeSocketRate(socket, meta, "p2p", 80, 10_000)) return;
       const targetId = safeText(data.to, 80);
       const signal = data.signal && typeof data.signal === "object" ? data.signal : {};
-      const kind = ["offer", "answer", "candidate", "hangup"].includes(signal.kind) ? signal.kind : "";
+      const kind = ["offer", "answer", "candidate", "hangup", "retry"].includes(signal.kind) ? signal.kind : "";
       if (!targetId || !kind) return;
 
       let cleanSignal;
@@ -437,11 +447,18 @@ export class CinemaRoom {
       return other !== socket && candidate?.clientId === meta.clientId;
     });
     if (!replacement) {
-      await this.ctx.storage.delete(`session:${meta.clientId}`);
-      await this.ctx.storage.delete(`turn:${meta.clientId}`);
       this.broadcast({ type: "peer:left", eventId: crypto.randomUUID(), peer: this.publicParticipant(meta) }, meta.id);
       if (this.room?.activeMedia?.publisherClientId === meta.clientId || this.room?.pendingMedia?.publisherClientId === meta.clientId) {
-        await this.stopMedia(meta.clientId, true);
+        // Give a temporarily disconnected Host time to resume the same logical
+        // room and media session. Immediate teardown turns a brief Wi-Fi or
+        // WebSocket interruption into a full-screen-share restart.
+        const deadline = Date.now() + 30_000;
+        this.room.publisherDisconnect = { clientId: meta.clientId, deadline };
+        await this.persist();
+        await this.ctx.storage.setAlarm(deadline);
+      } else {
+        await this.ctx.storage.delete(`session:${meta.clientId}`);
+        await this.ctx.storage.delete(`turn:${meta.clientId}`);
       }
     }
     this.broadcastPresence();
@@ -450,6 +467,25 @@ export class CinemaRoom {
 
   webSocketError(socket) {
     try { socket.close(1011, "WebSocket error"); } catch {}
+  }
+
+  async alarm() {
+    await this.ready;
+    const pending = this.room?.publisherDisconnect;
+    if (!pending || pending.deadline > Date.now()) {
+      if (pending) await this.ctx.storage.setAlarm(pending.deadline);
+      return;
+    }
+    const returned = this.ctx.getWebSockets().some((socket) => socketMeta(socket)?.clientId === pending.clientId);
+    if (returned) {
+      this.room.publisherDisconnect = null;
+      await this.persist();
+      return;
+    }
+    this.room.publisherDisconnect = null;
+    await this.ctx.storage.delete(`session:${pending.clientId}`);
+    await this.ctx.storage.delete(`turn:${pending.clientId}`);
+    await this.stopMedia(pending.clientId, true);
   }
 
   broadcast(payload, exceptId = null) {
