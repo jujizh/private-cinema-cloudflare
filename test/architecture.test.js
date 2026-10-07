@@ -26,12 +26,13 @@ test("chat history has a fixed panel and its own scrollbar", async () => {
   assert.match(app, /ui\.chatLog\.scrollTop = ui\.chatLog\.scrollHeight/);
 });
 
-test("cinema publishing prioritizes motion and keeps every simulcast layer watchable", async () => {
+test("cinema publishing prioritizes motion and enforces a watchable SFU quality floor", async () => {
   const [app, room] = await Promise.all([read("public/app.js"), read("src/room.js")]);
   assert.match(app, /contentHint = "motion"/);
   assert.match(app, /degradationPreference = "maintain-framerate"/);
-  assert.match(app, /rid: "z"[\s\S]*maxFramerate: 24/);
-  assert.match(app, /rid: "m"[\s\S]*maxFramerate: 30/);
+  assert.match(app, /function cinemaSfuEncodings/);
+  assert.match(app, /rid: "m"[\s\S]*maxBitrate: 2_200_000/);
+  assert.doesNotMatch(app, /rid: "z"/);
   assert.match(room, /quality === "high"[\s\S]*preferredRid: "a"[\s\S]*priorityOrdering: "asciibetical"/);
   assert.doesNotMatch(room, /quality === "high"[^\n]*priorityOrdering: "none"/);
 });
@@ -68,6 +69,9 @@ test("small rooms get direct P2P fan-out with SFU fallback", async () => {
   assert.match(app, /scheduleDirectRetry/);
   assert.match(app, /signal: \{ kind: "retry" \}/);
   assert.match(room, /"hangup", "retry"/);
+  assert.match(app, /function requestSfuStandby/);
+  assert.match(app, /sender\.replaceTrack\(null\)/);
+  assert.match(app, /scheduleSfuStandbyIfAllDirect/);
 });
 
 test("network reconnects preserve logical participant identity", async () => {

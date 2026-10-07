@@ -713,7 +713,7 @@ export class CinemaRoom {
   }
 
   simulcastPreference(quality) {
-    if (quality === "data") return { preferredRid: "z", priorityOrdering: "none", ridNotAvailable: "asciibetical" };
+    if (quality === "data") return { preferredRid: "m", priorityOrdering: "none", ridNotAvailable: "asciibetical" };
     // Balanced and best-quality are preferences, not hard locks. The SFU must
     // remain free to step down when a phone or network cannot sustain the RID.
     if (quality === "balanced") return { preferredRid: "m", priorityOrdering: "asciibetical", ridNotAvailable: "asciibetical" };

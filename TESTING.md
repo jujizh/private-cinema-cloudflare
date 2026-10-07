@@ -63,6 +63,9 @@ Interpretation:
 1. Join with one viewer and begin broadcasting.
 2. The viewer should start on the SFU and then switch automatically to
    **Direct P2P** after ICE negotiation completes.
+   After another three seconds, the Host should show the message
+   **Direct route stable; SFU is on standby**. Direct bitrate and resolution
+   should then recover instead of remaining near 480x270.
 3. Add a second and then a third viewer. Each should negotiate its own P2P or
    P2P-via-TURN route; monitor Host CPU and upload usage while doing so.
 4. On the same Wi-Fi, expect UDP, low RTT and near-zero loss. If the panel says

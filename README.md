@@ -68,10 +68,20 @@ No permanent credential belongs in the repository. Put every secret in Cloudflar
 
 See [SECURITY.md](SECURITY.md) for the trust model and [TESTING.md](TESTING.md) for the pre-release checklist.
 
-## v2.2.1 resilient private route and endpoint subtitles
+## v2.2.2 direct-first media and endpoint subtitles
 
 - Up to three viewers use separate direct P2P fast paths. A fourth viewer
   switches the room to SFU fan-out so Host upload does not grow without bound.
+- Once every small-room viewer has held a direct connection for three seconds,
+  the Host pauses its parallel SFU sender tracks. This removes duplicate
+  P2P-plus-simulcast encoding/upload that could make Chrome's congestion
+  controller reduce a healthy direct stream to 480x270. The SFU PeerConnection
+  remains allocated as a cold standby and resumes before a direct fallback or
+  larger-room transition.
+- Active SFU mode now publishes only two cinema-grade layers: 1080p with a
+  720p fallback, or 720p with a 540p fallback. The previous 180p/270p emergency
+  layer was removed because maintaining a connection below the product's
+  watchable quality floor is not a useful movie experience.
 - The control WebSocket now sends a heartbeat. Losing that control connection
   briefly no longer stops screen capture or immediately tears down healthy
   media; the server grants the broadcaster a 30-second reconnect window.

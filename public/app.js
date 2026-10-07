@@ -60,6 +60,12 @@ const state = {
   captionTracks: [],
   captionOffsetSeconds: 0,
   captionTimer: null,
+  sfuSenderTracks: new Map(),
+  sfuStandby: false,
+  sfuStandbyDesired: false,
+  sfuSwitchPromise: Promise.resolve(),
+  sfuStandbyTimer: null,
+  turnNoticeShown: false,
 };
 
 function getClientId() {
@@ -444,6 +450,8 @@ function handleSocketMessage(raw) {
   }
   if (message.type === "peer:joined") {
     systemMessage(`${message.peer.name} joined.`);
+    // New viewers begin on the SFU while their direct route negotiates.
+    requestSfuStandby(false);
     resetHostDirectPeer(message.peer.id);
   }
   if (message.type === "peer:reconnected") {
@@ -549,9 +557,11 @@ function configureDirectPeer(pc, targetId) {
       if (state.role === "host" && state.directPeers.get(targetId) === pc) {
         clearDirectFallbackTimer(targetId);
         toast("Direct small-room route connected");
+        scheduleSfuStandbyIfAllDirect();
       }
     }
     if (pc.connectionState === "disconnected") {
+      requestSfuStandby(false);
       clearDirectDisconnectTimer(targetId);
       state.directDisconnectTimers.set(targetId, setTimeout(() => {
         if (pc.connectionState !== "disconnected") return;
@@ -564,6 +574,7 @@ function configureDirectPeer(pc, targetId) {
       }, DIRECT_DISCONNECT_GRACE_MS));
     }
     if (["failed", "closed"].includes(pc.connectionState)) {
+      requestSfuStandby(false);
       clearDirectDisconnectTimer(targetId);
       if (state.role === "host" && state.directPeers.get(targetId) === pc) {
         clearDirectFallbackTimer(targetId);
@@ -692,6 +703,52 @@ function fallbackFromDirect(pc, hostId = "") {
   if (hostId) sendSocket({ type: "p2p:signal", to: hostId, signal: { kind: "retry" } });
 }
 
+function allCurrentViewersAreDirect() {
+  const viewerIds = directViewerIds();
+  return viewerIds.length > 0 && viewerIds.length <= MAX_DIRECT_VIEWERS && viewerIds.every((viewerId) => {
+    return state.directPeers.get(viewerId)?.connectionState === "connected";
+  });
+}
+
+function scheduleSfuStandbyIfAllDirect() {
+  if (state.role !== "host" || !allCurrentViewersAreDirect()) return;
+  clearTimeout(state.sfuStandbyTimer);
+  state.sfuStandbyTimer = setTimeout(() => {
+    state.sfuStandbyTimer = null;
+    if (allCurrentViewersAreDirect()) requestSfuStandby(true);
+  }, 3_000);
+}
+
+function requestSfuStandby(standby) {
+  if (state.role !== "host") return Promise.resolve();
+  state.sfuStandbyDesired = Boolean(standby);
+  if (!standby && state.sfuStandbyTimer) {
+    clearTimeout(state.sfuStandbyTimer);
+    state.sfuStandbyTimer = null;
+  }
+  state.sfuSwitchPromise = state.sfuSwitchPromise.then(async () => {
+    while (state.sfuStandby !== state.sfuStandbyDesired) {
+      const desired = state.sfuStandbyDesired;
+      const entries = [...state.sfuSenderTracks.entries()].filter(([sender]) => sender && state.pc?.getSenders().includes(sender));
+      if (!entries.length) {
+        state.sfuStandby = false;
+        return;
+      }
+      await Promise.all(entries.map(async ([sender, originalTrack]) => {
+        if (desired && sender.track) await sender.replaceTrack(null);
+        if (!desired && !sender.track && originalTrack?.readyState === "live") await sender.replaceTrack(originalTrack);
+      }));
+      state.sfuStandby = desired;
+      if (desired) toast("Direct route stable; SFU is on standby");
+    }
+  }).catch((error) => {
+    state.sfuStandby = false;
+    state.sfuStandbyDesired = false;
+    console.warn("Could not change SFU standby state", error);
+  });
+  return state.sfuSwitchPromise;
+}
+
 function closeViewerDirect(useFallback = true) {
   const pc = state.directPc;
   state.directPc = null;
@@ -735,7 +792,7 @@ function reconcileDirectRoute() {
       return;
     }
     if (viewerIds.length > MAX_DIRECT_VIEWERS) {
-      closeAllDirectConnections(true);
+      requestSfuStandby(false).finally(() => closeAllDirectConnections(true));
       return;
     }
     // A control WebSocket can disappear briefly while its independent media
@@ -763,6 +820,7 @@ function reconcileDirectRoute() {
       }
     }
     for (const viewerId of viewerIds) startHostDirectPeer(viewerId);
+    scheduleSfuStandbyIfAllDirect();
     return;
   }
   if (!directFanoutAvailable() && state.directPc) closeViewerDirect(true);
@@ -884,6 +942,19 @@ function qualityProfile() {
   return { width: 1280, height: 720, bitrate: 2_200_000 };
 }
 
+function cinemaSfuEncodings(profile) {
+  const original = { rid: "a", scaleResolutionDownBy: 1, maxBitrate: profile.bitrate, maxFramerate: 30 };
+  // Keep a cinema-quality floor instead of publishing the old 180p/270p
+  // emergency layer. 1080p falls back to 720p; 720p falls back to 540p.
+  if (profile.width >= 1900) {
+    return [original, { rid: "m", scaleResolutionDownBy: 1.5, maxBitrate: 2_200_000, maxFramerate: 30 }];
+  }
+  if (profile.width >= 1200) {
+    return [original, { rid: "m", scaleResolutionDownBy: 4 / 3, maxBitrate: 1_400_000, maxFramerate: 30 }];
+  }
+  return [original];
+}
+
 async function preferMotionOverResolution(sender) {
   if (!sender?.track || sender.track.kind !== "video") return;
   try {
@@ -911,7 +982,10 @@ function preferH264ForDirectPlayback(transceiver) {
 
 async function getIceServers() {
   const result = await api(`/api/rooms/${state.roomId}/media/ice`, { method: "POST", body: "{}" });
-  if (result.enabled) systemMessage("Cloudflare TURN fallback is ready.");
+  if (result.enabled && !state.turnNoticeShown) {
+    state.turnNoticeShown = true;
+    systemMessage("Cloudflare TURN fallback is ready.");
+  }
   if (result.warning) systemMessage(`TURN warning: ${result.warning}`);
   return result.iceServers || [{ urls: ["stun:stun.cloudflare.com:3478"] }];
 }
@@ -957,14 +1031,13 @@ async function startBroadcast() {
     const transceivers = stream.getTracks().map((track) => {
       const init = { direction: "sendonly" };
       if (track.kind === "video") {
-        init.sendEncodings = [
-          { rid: "a", scaleResolutionDownBy: 1, maxBitrate: profile.bitrate, maxFramerate: 30 },
-          { rid: "m", scaleResolutionDownBy: 2, maxBitrate: Math.max(900_000, Math.round(profile.bitrate * 0.45)), maxFramerate: 30 },
-          { rid: "z", scaleResolutionDownBy: 4, maxBitrate: Math.max(400_000, Math.round(profile.bitrate * 0.18)), maxFramerate: 24 },
-        ];
+        init.sendEncodings = cinemaSfuEncodings(profile);
       }
       return pc.addTransceiver(track, init);
     });
+    state.sfuSenderTracks = new Map(transceivers.map(({ sender }) => [sender, sender.track]));
+    state.sfuStandby = false;
+    state.sfuStandbyDesired = false;
     await Promise.all(transceivers.map(({ sender }) => preferMotionOverResolution(sender)));
 
     const offer = await pc.createOffer();
@@ -1101,6 +1174,11 @@ async function stopBroadcast(notifyServer = true) {
   const sessionId = state.sessionId;
   const localStream = state.localStream;
   state.localStream = null;
+  clearTimeout(state.sfuStandbyTimer);
+  state.sfuStandbyTimer = null;
+  state.sfuStandbyDesired = false;
+  state.sfuStandby = false;
+  state.sfuSenderTracks.clear();
   closeAllDirectConnections(true);
   if (localStream) localStream.getTracks().forEach((track) => track.stop());
   closePeerConnection();
@@ -1130,6 +1208,13 @@ function closePeerConnection() {
   }
   state.pc = null;
   state.sessionId = "";
+  if (state.role === "host") {
+    clearTimeout(state.sfuStandbyTimer);
+    state.sfuStandbyTimer = null;
+    state.sfuStandbyDesired = false;
+    state.sfuStandby = false;
+    state.sfuSenderTracks.clear();
+  }
   state.previousRtp.clear();
 }
 
