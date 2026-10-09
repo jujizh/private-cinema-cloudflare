@@ -105,6 +105,23 @@ test("route switching is make-before-break and waits for a decoded frame", async
   assert.doesNotMatch(app, /function activateDirectViewer[\s\S]{0,400}state\.pc\.close/);
 });
 
+test("viewer playback watchdog repairs connected-but-frozen media without a page refresh", async () => {
+  const app = await read("public/app.js");
+  assert.match(app, /MEDIA_STALL_WITH_AUDIO_MS = 7_500/);
+  assert.match(app, /MEDIA_STALL_HARD_MS = 15_000/);
+  assert.match(app, /function readInboundMediaCounters/);
+  assert.match(app, /framesDecoded/);
+  assert.match(app, /getVideoPlaybackQuality/);
+  assert.match(app, /presentedFrames/);
+  assert.match(app, /function recordInboundProgress/);
+  assert.match(app, /async function checkViewerPlaybackHealth/);
+  assert.match(app, /async function recoverStalledPlayback/);
+  assert.match(app, /P2P video stopped decoding/);
+  assert.match(app, /subscribeToBroadcast\(true\)/);
+  assert.match(app, /make-before-break/);
+  assert.match(app, /startPlaybackWatchdog\(\)/);
+});
+
 test("network reconnects preserve logical participant identity", async () => {
   const [app, room] = await Promise.all([read("public/app.js"), read("src/room.js")]);
   assert.match(room, /participantId: randomToken\(12\)/);
@@ -113,7 +130,12 @@ test("network reconnects preserve logical participant identity", async () => {
   assert.match(room, /if \(meta\.replaced\) return/);
   assert.match(room, /peer:reconnected/);
   assert.match(room, /latestByClient/);
-  assert.match(app, /resetHostDirectPeer/);
+  assert.match(room, /PARTICIPANT_RECONNECT_GRACE_MS = 45_000/);
+  assert.match(room, /participantDisconnects/);
+  assert.match(room, /reconnecting: Boolean\(meta\.reconnecting\)/);
+  assert.match(room, /replacingConnection \|\| pendingReconnect/);
+  assert.match(app, /Do not close an existing media route/);
+  assert.doesNotMatch(app, /peer:joined[\s\S]{0,300}resetHostDirectPeer/);
   assert.match(app, /type: "ping"/);
   assert.match(room, /type: "pong"/);
   assert.match(room, /publisherDisconnect/);

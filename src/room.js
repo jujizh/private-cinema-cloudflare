@@ -15,6 +15,7 @@ const ROOM_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const CAPTION_MAX_TRACKS = 12;
 const CAPTION_MAX_BYTES = 768 * 1024;
 const CAPTION_CHUNK_BYTES = 48 * 1024;
+const PARTICIPANT_RECONNECT_GRACE_MS = 45_000;
 const ALLOWED_REACTIONS = new Set(["❤️", "😂", "🥹", "😍", "👏", "🔥"]);
 
 function claimsFromRequest(request) {
@@ -140,7 +141,8 @@ export class CinemaRoom {
 
   async scheduleNextAlarm() {
     if (!this.room) return;
-    const deadlines = [this.room.publisherDisconnect?.deadline, this.room.cleanupAt]
+    const reconnectDeadlines = Object.values(this.room.participantDisconnects || {}).map((entry) => entry.deadline);
+    const deadlines = [this.room.publisherDisconnect?.deadline, this.room.cleanupAt, ...reconnectDeadlines]
       .filter((value) => Number(value) > Date.now());
     if (deadlines.length) await this.ctx.storage.setAlarm(Math.min(...deadlines));
   }
@@ -166,6 +168,7 @@ export class CinemaRoom {
       invites: {},
       bannedClients: {},
       admittedClients: {},
+      participantDisconnects: {},
       activeMedia: null,
       pendingMedia: null,
       captions: [],
@@ -403,10 +406,18 @@ export class CinemaRoom {
     await this.ctx.storage.delete(`ticket:${ticketId}`);
     this.assertClaim(ticket.claims);
 
+    this.room.participantDisconnects ||= {};
+    const pendingReconnect = this.room.participantDisconnects[ticket.clientId] || null;
+    let roomChanged = false;
+    if (pendingReconnect) {
+      delete this.room.participantDisconnects[ticket.clientId];
+      roomChanged = true;
+    }
     if (this.room.publisherDisconnect?.clientId === ticket.clientId) {
       this.room.publisherDisconnect = null;
-      await this.persist();
+      roomChanged = true;
     }
+    if (roomChanged) await this.persist();
 
     let replacingConnection = false;
     for (const oldSocket of this.ctx.getWebSockets()) {
@@ -430,9 +441,9 @@ export class CinemaRoom {
       inviteId: ticket.claims.jti,
       role: ticket.claims.role,
       name: ticket.name,
-      joinedAt: Date.now(),
+      joinedAt: pendingReconnect?.peer?.joinedAt || Date.now(),
       rate: {},
-      quality: null,
+      quality: pendingReconnect?.peer?.quality || null,
     };
     server.serializeAttachment(meta);
     this.ctx.acceptWebSocket(server);
@@ -445,7 +456,7 @@ export class CinemaRoom {
       media: this.room.activeMedia ? this.mediaAnnouncement() : null,
     }));
     this.broadcast({
-      type: replacingConnection ? "peer:reconnected" : "peer:joined",
+      type: replacingConnection || pendingReconnect ? "peer:reconnected" : "peer:joined",
       eventId: crypto.randomUUID(),
       peer: this.publicParticipant(meta),
     }, meta.id);
@@ -461,6 +472,7 @@ export class CinemaRoom {
       role: meta.role,
       joinedAt: meta.joinedAt,
       quality: meta.quality || null,
+      reconnecting: Boolean(meta.reconnecting),
     };
   }
 
@@ -471,6 +483,15 @@ export class CinemaRoom {
       if (!meta) continue;
       const existing = latestByClient.get(meta.clientId);
       if (!existing || Number(meta.joinedAt) >= Number(existing.joinedAt)) latestByClient.set(meta.clientId, meta);
+    }
+    const now = Date.now();
+    for (const pending of Object.values(this.room?.participantDisconnects || {})) {
+      if (!pending?.clientId || Number(pending.deadline) <= now || latestByClient.has(pending.clientId)) continue;
+      latestByClient.set(pending.clientId, {
+        ...pending.peer,
+        clientId: pending.clientId,
+        reconnecting: true,
+      });
     }
     return [...latestByClient.values()].map((meta) => this.publicParticipant(meta));
   }
@@ -630,7 +651,7 @@ export class CinemaRoom {
     };
   }
 
-  async webSocketClose(socket) {
+  async webSocketClose(socket, code = 1006, reason = "") {
     const meta = socketMeta(socket);
     if (!meta) return;
     if (meta.replaced) return;
@@ -639,18 +660,37 @@ export class CinemaRoom {
       return other !== socket && candidate?.clientId === meta.clientId;
     });
     if (!replacement) {
-      this.broadcast({ type: "peer:left", eventId: crypto.randomUUID(), peer: this.publicParticipant(meta) }, meta.id);
-      if (this.room?.activeMedia?.publisherClientId === meta.clientId || this.room?.pendingMedia?.publisherClientId === meta.clientId) {
-        // Give a temporarily disconnected Host time to resume the same logical
-        // room and media session. Immediate teardown turns a brief Wi-Fi or
-        // WebSocket interruption into a full-screen-share restart.
-        const deadline = Date.now() + 30_000;
-        this.room.publisherDisconnect = { clientId: meta.clientId, deadline };
-        await this.persist();
-        await this.scheduleNextAlarm();
-      } else {
+      // A proxy is allowed to close with 1000 as well, so only the explicit
+      // client leave reason is treated as an immediate departure.
+      const intentional = [4003, 4004].includes(Number(code)) || (Number(code) === 1000 && reason === "Left room");
+      this.room.participantDisconnects ||= {};
+      if (intentional) {
+        delete this.room.participantDisconnects[meta.clientId];
+        this.broadcast({ type: "peer:left", eventId: crypto.randomUUID(), peer: this.publicParticipant(meta) }, meta.id);
         await this.ctx.storage.delete(`session:${meta.clientId}`);
         await this.ctx.storage.delete(`turn:${meta.clientId}`);
+        if (this.room?.activeMedia?.publisherClientId === meta.clientId || this.room?.pendingMedia?.publisherClientId === meta.clientId) {
+          this.room.publisherDisconnect = null;
+          await this.stopMedia(meta.clientId, true);
+        } else {
+          await this.persist();
+        }
+      } else {
+        // The control WebSocket and the movie PeerConnection are independent.
+        // Preserve the logical participant while a VPN/Wi-Fi handoff repairs
+        // the control plane; otherwise a momentary outage becomes a forced
+        // P2P teardown and a visible video pause.
+        const deadline = Date.now() + PARTICIPANT_RECONNECT_GRACE_MS;
+        this.room.participantDisconnects[meta.clientId] = {
+          clientId: meta.clientId,
+          deadline,
+          peer: this.publicParticipant(meta),
+        };
+        if (this.room?.activeMedia?.publisherClientId === meta.clientId || this.room?.pendingMedia?.publisherClientId === meta.clientId) {
+          this.room.publisherDisconnect = { clientId: meta.clientId, deadline };
+        }
+        await this.persist();
+        await this.scheduleNextAlarm();
       }
     }
     this.broadcastPresence();
@@ -668,22 +708,37 @@ export class CinemaRoom {
       await this.purgeRoom(this.room.id);
       return;
     }
-    const pending = this.room?.publisherDisconnect;
-    if (!pending || pending.deadline > Date.now()) {
-      await this.scheduleNextAlarm();
-      return;
+    const now = Date.now();
+    this.room.participantDisconnects ||= {};
+    let changed = false;
+    for (const [clientId, pending] of Object.entries(this.room.participantDisconnects)) {
+      if (Number(pending.deadline) > now) continue;
+      const returned = this.ctx.getWebSockets().some((socket) => socketMeta(socket)?.clientId === clientId);
+      delete this.room.participantDisconnects[clientId];
+      changed = true;
+      if (returned) continue;
+      this.broadcast({ type: "peer:left", eventId: crypto.randomUUID(), peer: pending.peer });
+      await this.ctx.storage.delete(`session:${clientId}`);
+      await this.ctx.storage.delete(`turn:${clientId}`);
+      if (this.room?.activeMedia?.publisherClientId === clientId || this.room?.pendingMedia?.publisherClientId === clientId) {
+        this.room.publisherDisconnect = null;
+        await this.stopMedia(clientId, true);
+      }
     }
-    const returned = this.ctx.getWebSockets().some((socket) => socketMeta(socket)?.clientId === pending.clientId);
-    if (returned) {
+    const publisher = this.room.publisherDisconnect;
+    if (publisher && publisher.deadline <= now) {
+      const returned = this.ctx.getWebSockets().some((socket) => socketMeta(socket)?.clientId === publisher.clientId);
       this.room.publisherDisconnect = null;
-      await this.persist();
-      await this.scheduleNextAlarm();
-      return;
+      changed = true;
+      if (!returned) {
+        await this.ctx.storage.delete(`session:${publisher.clientId}`);
+        await this.ctx.storage.delete(`turn:${publisher.clientId}`);
+        await this.stopMedia(publisher.clientId, true);
+      }
     }
-    this.room.publisherDisconnect = null;
-    await this.ctx.storage.delete(`session:${pending.clientId}`);
-    await this.ctx.storage.delete(`turn:${pending.clientId}`);
-    await this.stopMedia(pending.clientId, true);
+    if (changed) await this.persist();
+    this.broadcastPresence();
+    this.ctx.waitUntil(this.directoryUpdate());
     await this.scheduleNextAlarm();
   }
 

@@ -69,6 +69,44 @@ No permanent credential belongs in the repository. Put every secret in Cloudflar
 
 See [SECURITY.md](SECURITY.md) for the trust model and [TESTING.md](TESTING.md) for the pre-release checklist.
 
+## v2.3.4 Frozen-video recovery
+
+- Viewer playback is no longer considered healthy merely because WebRTC still
+  says `connected`. A watchdog checks inbound decoded frames, actual frames
+  presented by the visible video element, and audio progress every 2.5 seconds.
+- If audio continues while video produces no new frame for 7.5 seconds, the
+  route is treated as frozen. A complete media silence uses a conservative
+  15-second threshold so a deliberately paused or static source does not flap.
+- A frozen P2P route first verifies the hot SFU backup. If necessary it creates
+  a fresh SFU subscription, waits for its first frame, and only then switches.
+- A frozen SFU route is replaced make-before-break. The old picture remains on
+  screen until the new subscription has decoded a frame, so recovery does not
+  require the Viewer to refresh the page.
+- If the visible video element was locally paused by browser controls or an
+  autoplay interruption, the watchdog resumes it automatically.
+
+This is the primary repair for a Viewer whose picture freezes while the room
+and WebRTC connection still appear online. v2.3.3's reconnect grace remains as
+a secondary protection when a Viewer refreshes or changes networks.
+
+## v2.3.3 Control reconnect stabilization
+
+- A temporary room WebSocket outage no longer emits an immediate leave event.
+  The same logical participant remains present for a 45-second reconnect grace
+  period while an existing P2P or SFU media route is preserved.
+- A returning browser is announced as reconnected, not as a newly joined
+  device. The Host therefore does not close and rebuild a healthy P2P route.
+- The participant list shows `reconnecting` during the grace period. A real
+  departure is announced only after the grace expires, or immediately when the
+  user explicitly chooses Leave, is removed, or the screening ends.
+- Repeated WebSocket welcomes no longer fill the room chat with duplicate
+  `You entered as ...` messages.
+
+This specifically fixes the failure mode where a VPN or cross-border control
+connection briefly flapped and the application itself amplified it into a
+visible movie pause. It does not claim that an underlying media-path outage can
+never occur; v2.3.2's hot SFU/P2P fallback still handles that separate layer.
+
 ## v2.3.2 Seamless route switching
 
 - Viewers keep separate P2P and SFU video pipelines. The hidden backup keeps

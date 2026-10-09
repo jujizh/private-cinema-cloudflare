@@ -8,6 +8,10 @@ const DIRECT_DISCONNECT_GRACE_MS = 12_000;
 const DIRECT_FAILURE_COOLDOWN_MS = 10 * 60_000;
 const DIRECT_RETRY_DELAYS_MS = [15_000, 60_000, 5 * 60_000, 10 * 60_000];
 const FIRST_FRAME_TIMEOUT_MS = 12_000;
+const MEDIA_WATCHDOG_INTERVAL_MS = 2_500;
+const MEDIA_STALL_WITH_AUDIO_MS = 7_500;
+const MEDIA_STALL_HARD_MS = 15_000;
+const MEDIA_RECOVERY_COOLDOWN_MS = 12_000;
 
 const ui = Object.fromEntries([
   "connectionPill", "connectionText", "entryView", "inviteEntry", "ownerEntry", "ownerDashboard", "closedEntry",
@@ -90,6 +94,11 @@ const state = {
   activeRoute: "none",
   routeSwitches: 0,
   routeReason: "Preparing both routes",
+  hasWelcomed: false,
+  playbackWatchdogTimer: null,
+  mediaProgress: new WeakMap(),
+  stallRecoveryPromise: null,
+  lastStallRecoveryAt: 0,
 };
 
 function getClientId() {
@@ -191,11 +200,165 @@ async function switchViewerRoute(route, reason) {
   setVisible(ui.liveBadge, true);
   if (previousRoute !== "none" && previousRoute !== route) state.routeSwitches += 1;
   state.activeRoute = route;
+  state.mediaProgress.delete(route === "direct" ? state.directPc : state.pc);
   updateRouteStatus(reason);
   setConnection(route === "direct" ? "Direct stream connected" : "Backup stream connected", "online");
   state.previousRtp.clear();
   startStats();
+  startPlaybackWatchdog();
   return true;
+}
+
+async function readInboundMediaCounters(pc) {
+  if (!pc || pc.connectionState === "closed") return null;
+  const reports = await pc.getStats();
+  let videoFrames = 0;
+  let videoBytes = 0;
+  let audioBytes = 0;
+  let hasFrameCounter = false;
+  reports.forEach((report) => {
+    if (report.type !== "inbound-rtp" || report.isRemote) return;
+    const kind = report.kind || report.mediaType;
+    if (kind === "video") {
+      videoBytes += Number(report.bytesReceived) || 0;
+      if (Number.isFinite(Number(report.framesDecoded))) {
+        hasFrameCounter = true;
+        videoFrames += Number(report.framesDecoded) || 0;
+      } else if (Number.isFinite(Number(report.framesReceived))) {
+        hasFrameCounter = true;
+        videoFrames += Number(report.framesReceived) || 0;
+      }
+    }
+    if (kind === "audio") audioBytes += Number(report.bytesReceived) || 0;
+  });
+  return { videoFrames, videoBytes, audioBytes, hasFrameCounter };
+}
+
+function recordInboundProgress(pc, counters, now = performance.now()) {
+  const previous = state.mediaProgress.get(pc);
+  if (!previous) {
+    const first = { ...counters, lastVideoAt: now, lastAudioAt: now };
+    state.mediaProgress.set(pc, first);
+    return first;
+  }
+  const presentationAvailable = counters.hasPresentationCounter && previous.hasPresentationCounter;
+  const videoAdvanced = presentationAvailable
+    ? counters.presentedFrames > previous.presentedFrames
+    : counters.hasFrameCounter && previous.hasFrameCounter
+      ? counters.videoFrames > previous.videoFrames
+      : counters.videoBytes > previous.videoBytes;
+  const audioAdvanced = counters.audioBytes > previous.audioBytes;
+  const next = {
+    ...counters,
+    lastVideoAt: videoAdvanced ? now : previous.lastVideoAt,
+    lastAudioAt: audioAdvanced ? now : previous.lastAudioAt,
+  };
+  state.mediaProgress.set(pc, next);
+  return next;
+}
+
+async function waitForInboundVideoProgress(pc, timeoutMs = 3_500) {
+  if (!pc || pc.connectionState !== "connected") return false;
+  const baseline = await readInboundMediaCounters(pc);
+  if (!baseline) return false;
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline && pc.connectionState === "connected") {
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    const current = await readInboundMediaCounters(pc);
+    if (!current) return false;
+    const advanced = current.hasFrameCounter && baseline.hasFrameCounter
+      ? current.videoFrames > baseline.videoFrames
+      : current.videoBytes > baseline.videoBytes;
+    if (advanced) {
+      recordInboundProgress(pc, current);
+      return true;
+    }
+  }
+  return false;
+}
+
+async function recoverStalledPlayback(route, pc, stalledForMs) {
+  if (state.stallRecoveryPromise || Date.now() - state.lastStallRecoveryAt < MEDIA_RECOVERY_COOLDOWN_MS) return;
+  state.lastStallRecoveryAt = Date.now();
+  state.stallRecoveryPromise = (async () => {
+    const seconds = Math.max(1, Math.round(stalledForMs / 1000));
+    setConnection("Video stalled; recovering without a refresh", "warn");
+    updateRouteStatus(`${route === "direct" ? "P2P" : "SFU"} decoded no new frames for ${seconds}s · preparing replacement`);
+
+    if (route === "direct") {
+      const stalledPc = pc;
+      let backupFresh = state.sfuReady
+        && state.pc?.connectionState === "connected"
+        && await waitForInboundVideoProgress(state.pc);
+      if (!backupFresh && state.media) {
+        const replaced = await subscribeToBroadcast(true);
+        backupFresh = Boolean(replaced && state.sfuReady && state.pc?.connectionState === "connected");
+      }
+      if (backupFresh && state.directPc === stalledPc && state.activeRoute === "direct") {
+        const host = state.participants.find((participant) => participant.role === "host");
+        await fallbackFromDirect(stalledPc, host?.id || "", "P2P video stopped decoding");
+      } else {
+        updateRouteStatus("P2P stalled · backup has no fresh frame yet, keeping the last picture");
+      }
+      return;
+    }
+
+    // An SFU PeerConnection may remain `connected` even after inbound video
+    // has stopped. Replace it make-before-break; subscribeToBroadcast keeps the
+    // old picture until the replacement has decoded its first frame.
+    if (state.activeRoute === "sfu" && state.pc === pc && state.media) {
+      const restored = await subscribeToBroadcast(true);
+      if (!restored) updateRouteStatus("SFU video stalled · retrying while the last picture remains visible");
+    }
+  })().catch((error) => {
+    console.warn("Automatic playback recovery failed", error);
+  }).finally(() => {
+    state.stallRecoveryPromise = null;
+    const activePc = state.activeRoute === "direct" ? state.directPc : state.pc;
+    if (activePc) state.mediaProgress.delete(activePc);
+  });
+  await state.stallRecoveryPromise;
+}
+
+async function checkViewerPlaybackHealth() {
+  if (state.role !== "viewer" || !state.media || !["direct", "sfu"].includes(state.activeRoute)) return;
+  if (document.visibilityState !== "visible" || state.stallRecoveryPromise) return;
+  const route = state.activeRoute;
+  const pc = route === "direct" ? state.directPc : state.pc;
+  if (!pc || pc.connectionState !== "connected") return;
+
+  const video = route === "direct" ? ui.directVideo : ui.remoteVideo;
+  if (video.paused) {
+    try { await video.play(); } catch {}
+  }
+
+  try {
+    const counters = await readInboundMediaCounters(pc);
+    if (!counters || pc !== (route === "direct" ? state.directPc : state.pc) || route !== state.activeRoute) return;
+    const playbackQuality = video.getVideoPlaybackQuality?.();
+    counters.hasPresentationCounter = Number.isFinite(Number(playbackQuality?.totalVideoFrames));
+    counters.presentedFrames = Number(playbackQuality?.totalVideoFrames) || 0;
+    const now = performance.now();
+    const progress = recordInboundProgress(pc, counters, now);
+    const stalledForMs = now - progress.lastVideoAt;
+    const audioStillMoving = now - progress.lastAudioAt <= MEDIA_WATCHDOG_INTERVAL_MS * 2.5;
+    const threshold = audioStillMoving ? MEDIA_STALL_WITH_AUDIO_MS : MEDIA_STALL_HARD_MS;
+    if (stalledForMs >= threshold) await recoverStalledPlayback(route, pc, stalledForMs);
+  } catch (error) {
+    console.warn("Playback watchdog sample failed", error);
+  }
+}
+
+function startPlaybackWatchdog() {
+  if (state.playbackWatchdogTimer || state.role !== "viewer") return;
+  state.playbackWatchdogTimer = setInterval(checkViewerPlaybackHealth, MEDIA_WATCHDOG_INTERVAL_MS);
+}
+
+function stopPlaybackWatchdog() {
+  clearInterval(state.playbackWatchdogTimer);
+  state.playbackWatchdogTimer = null;
+  state.mediaProgress = new WeakMap();
+  state.stallRecoveryPromise = null;
 }
 
 function showHostPreview(stream) {
@@ -574,7 +737,10 @@ function handleSocketMessage(raw) {
     ui.cinemaTitle.textContent = message.room.title;
     renderParticipants();
     ui.lockRoom.textContent = message.room.locked ? "Unlock room" : "Lock room";
-    systemMessage(`You entered as ${message.role}.`);
+    if (!state.hasWelcomed) {
+      systemMessage(`You entered as ${message.role}.`);
+      state.hasWelcomed = true;
+    }
     if (state.role === "host") refreshInvites();
     if (state.role === "viewer" && message.media) subscribeToBroadcast();
     return;
@@ -589,7 +755,10 @@ function handleSocketMessage(raw) {
     systemMessage(`${message.peer.name} joined.`);
     // New viewers begin on the SFU while their direct route negotiates.
     requestSfuStandby(false);
-    resetHostDirectPeer(message.peer.id);
+    // Do not close an existing media route just because the independent
+    // control WebSocket reappeared. Presence reconciliation creates a route
+    // only when the stable participant ID genuinely has none.
+    reconcileDirectRoute();
   }
   if (message.type === "peer:reconnected") {
     systemMessage(`${message.peer.name} reconnected.`);
@@ -1091,11 +1260,13 @@ function renderParticipants() {
     const name = document.createElement("strong");
     name.textContent = `${participant.name}${participant.id === state.myId ? " · you" : ""}`;
     const role = document.createElement("small");
-    role.textContent = participant.role === "host" ? "Host" : "Viewer";
+    const roleName = participant.role === "host" ? "Host" : "Viewer";
+    role.textContent = participant.reconnecting ? `${roleName} · reconnecting` : roleName;
     copy.append(name, role);
     const quality = document.createElement("span");
-    quality.className = `quality-dot ${participant.quality?.state || "connecting"}`;
-    quality.title = participant.quality?.state || "connecting";
+    const qualityState = participant.reconnecting ? "connecting" : participant.quality?.state || "connecting";
+    quality.className = `quality-dot ${qualityState}`;
+    quality.title = participant.reconnecting ? "Control connection is reconnecting; media route is preserved" : qualityState;
     row.append(avatar, copy, quality);
     if (state.role === "host" && participant.role !== "host" && participant.id !== state.myId) {
       const kick = document.createElement("button");
@@ -1503,6 +1674,7 @@ function closePeerConnection() {
 }
 
 function hideVideos() {
+  stopPlaybackWatchdog();
   ui.remoteVideo.pause();
   ui.remoteVideo.srcObject = null;
   ui.remoteVideo.classList.remove("is-active");
@@ -2222,7 +2394,9 @@ function bindEvents() {
     // baseline so the first foreground sample is not presented as a five-second
     // loss/bitrate window.
     state.previousRtp.clear();
+    state.mediaProgress = new WeakMap();
     if (state.pc) collectStats();
+    if (state.role === "viewer") checkViewerPlaybackHealth();
     if (state.localStream && !state.wakeLock) requestWakeLock();
   });
   window.addEventListener("online", () => {

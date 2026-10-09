@@ -73,19 +73,30 @@ Interpretation:
    playback must remain on/fall back to Cloudflare SFU.
 6. Add a fourth viewer. Direct routes should close and all viewers should move
    to Cloudflare SFU so Host upload does not grow without bound.
-7. Switch one viewer between Wi-Fi and mobile data. It should reconnect under
-   the same logical participant identity and negotiate a new media path.
+7. Switch one viewer between Wi-Fi and mobile data. For up to 45 seconds the
+   participant row should say **reconnecting** without emitting `left` or
+   destroying a still-healthy media path. When the control socket returns it
+   should reconnect under the same logical participant identity.
 8. Temporarily block the direct route. Video should change to SFU only after the
    backup has a decoded frame and must not show the empty-stage placeholder.
    Route state should say it is pinned to SFU for ten minutes; P2P must not
    repeatedly reconnect during that cooldown.
 9. Leave the room idle for at least two minutes. The control WebSocket heartbeat
    should prevent idle disconnects.
-10. Briefly interrupt the Host's control connection. Existing media and screen
-    capture should remain alive during the 30-second reconnect grace period.
+10. Briefly interrupt either endpoint's control connection. Existing media and
+    screen capture should remain alive during the 45-second reconnect grace
+    period. The chat must not alternate repeated `left` and `joined` events.
 11. Repeat step 8 while recording the Viewer screen. A small timing jump is
     possible because P2P and SFU have different latency, but a multi-second black
     screen or repeated route flapping is a release blocker.
+12. While the Viewer is on Direct P2P, block only its P2P UDP path without
+    closing or refreshing the page. If the PeerConnection remains `connected`
+    but decoded/presented frames stop, the status should report automatic
+    recovery and move to a frame-ready SFU route.
+13. Repeat with the Viewer on SFU. A frozen-but-connected SFU subscription
+    should be replaced while the last picture remains visible. The Viewer must
+    not need to refresh, and a deliberately paused source should not repeatedly
+    switch routes.
 
 ## Room Caption Library test
 
