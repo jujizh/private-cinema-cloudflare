@@ -2,14 +2,14 @@
 
 An invitation-only watch-together cinema designed for long-term deployment on Cloudflare.
 
-The owner creates a private screening at `/host`, sends signed invitations, and shares a browser tab or screen. The media is published once to Cloudflare Realtime SFU and distributed to invited viewers. Movie files are not uploaded to the Worker or Durable Objects.
+The owner creates a private screening at `/host`, sends signed invitations, and shares a browser tab or screen. Small rooms prefer direct WebRTC while a parallel Cloudflare Realtime SFU path stays decoded and ready for make-before-break fallback. Movie files are not uploaded to the Worker or Durable Objects.
 
 ## What changed in v2
 
 - Real server-side owner, host, and viewer permissions
 - Cryptographically signed, expiring and revocable invitations
 - One-time WebSocket tickets so invitation tokens do not stay in socket URLs
-- Cloudflare Realtime SFU: the broadcaster uploads once instead of once per viewer
+- Hybrid media: direct P2P for up to three viewers plus a live Cloudflare SFU backup/fan-out path
 - No application-level viewer cap
 - Simulcast quality layers: Data saver, Balanced, High, and Auto
 - TURN credentials only for authenticated people who are already inside a room
@@ -24,7 +24,8 @@ The owner creates a private screening at `/host`, sends signed invitations, and 
 ```mermaid
 flowchart LR
   O[Owner at /host] -->|creates signed invite| W[Worker + Durable Objects]
-  H[Authorized broadcaster] -->|one WebRTC upload| S[Cloudflare Realtime SFU]
+  H[Authorized broadcaster] -->|hot backup / group upload| S[Cloudflare Realtime SFU]
+  H -->|small-room P2P fast path| V1
   W -->|authorizes publish and subscribe| S
   S --> V1[Invited viewer]
   S --> V2[Invited viewer]
@@ -67,6 +68,25 @@ No permanent credential belongs in the repository. Put every secret in Cloudflar
 - The Network panel reports the actual selected WebRTC path and live transport statistics.
 
 See [SECURITY.md](SECURITY.md) for the trust model and [TESTING.md](TESTING.md) for the pre-release checklist.
+
+## v2.3.2 Seamless route switching
+
+- Viewers keep separate P2P and SFU video pipelines. The hidden backup keeps
+  playing muted instead of being destroyed when the direct route wins.
+- A route is not displayed until its first video frame has decoded. Only then
+  does the UI atomically mute the old route and reveal the new one.
+- The Host keeps SFU sender tracks live in small rooms. This uses more bandwidth
+  than cold standby, but removes the black gap while SFU publication resumes.
+- A failed P2P path is pinned to SFU for ten minutes. The endpoints exchange a
+  bounded `defer` signal instead of flapping between paths every few seconds.
+- Transient ICE `disconnected` state gets a twelve-second grace period. SFU
+  replacement subscriptions also retire the old connection only after the
+  replacement has decoded a frame.
+- Stream Health shows the route-switch reason and total switch count.
+
+No new Cloudflare binding or secret is required. Because SFU is a true hot
+backup, Realtime traffic can continue while a Viewer watches over P2P. This is
+the intentional reliability tradeoff in v2.3.2.
 
 ## v2.3.1 Caption sizing and playback clock
 
@@ -117,6 +137,9 @@ Companion or an integrated local player that owns the movie clock.
   Durable Object state is automatically purged after the same retention window.
 
 ## v2.2.2 direct-first media and endpoint subtitles
+
+> Historical note: v2.3.2 supersedes the cold-SFU behavior below. SFU tracks are
+> now kept live so fallback is frame-ready before the visible route changes.
 
 - Up to three viewers use separate direct P2P fast paths. A fourth viewer
   switches the room to SFU fan-out so Host upload does not grow without bound.

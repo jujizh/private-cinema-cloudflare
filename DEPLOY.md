@@ -90,6 +90,10 @@ No new Cloudflare binding or secret is required for v2.3.0. Room subtitle data
 uses the existing `ROOMS` Durable Object storage. Existing v2 rooms without a
 `captions` field are migrated lazily and continue to work.
 
+v2.3.2 also needs no new binding or secret. Deploy the Worker and refresh every
+open cinema tab. Its SFU path stays live as a hot backup during small-room P2P
+playback, so Realtime usage can be higher than v2.3.1 by design.
+
 ## 6. Test on a real cross-country path
 
 Testing two tabs on one computer does not measure international network quality. Use two devices on different networks for at least ten minutes:

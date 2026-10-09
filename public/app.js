@@ -4,18 +4,20 @@ const $ = (id) => document.getElementById(id);
 // per viewer, so larger rooms still switch to SFU fan-out.
 const MAX_DIRECT_VIEWERS = 3;
 const HEARTBEAT_INTERVAL_MS = 25_000;
-const DIRECT_DISCONNECT_GRACE_MS = 6_000;
-const DIRECT_RETRY_DELAYS_MS = [3_000, 8_000, 15_000, 30_000, 60_000];
+const DIRECT_DISCONNECT_GRACE_MS = 12_000;
+const DIRECT_FAILURE_COOLDOWN_MS = 10 * 60_000;
+const DIRECT_RETRY_DELAYS_MS = [15_000, 60_000, 5 * 60_000, 10 * 60_000];
+const FIRST_FRAME_TIMEOUT_MS = 12_000;
 
 const ui = Object.fromEntries([
   "connectionPill", "connectionText", "entryView", "inviteEntry", "ownerEntry", "ownerDashboard", "closedEntry",
   "closedMessage", "guestName", "enterRoomButton", "inviteRoleText", "inviteError", "ownerLoginForm", "ownerPassword",
   "ownerError", "createRoomForm", "roomTitle", "roomHours", "dashboardError", "logoutButton", "recentRooms",
   "refreshRooms", "cinemaView", "cinemaTitle", "copyGuestLink", "lockRoom", "leaveRoom", "stage", "remoteVideo",
-  "previewVideo", "stageEmpty", "stageKicker", "stageTitle", "stageHint", "liveBadge", "reactionLayer", "startShare",
+  "directVideo", "previewVideo", "stageEmpty", "stageKicker", "stageTitle", "stageHint", "liveBadge", "reactionLayer", "startShare",
   "stopShare", "openMovie", "movieFile", "qualitySelect", "pictureInPicture", "fullscreenButton", "shareTip",
   "peopleCount", "participants", "healthLabel", "routeValue", "transportValue", "bitrateValue", "latencyValue",
-  "lossValue", "resolutionValue", "sourceValue", "availableBitrateValue", "frameDropsValue", "limitationValue", "hostDiagnostics", "diagnosticList", "chatLog", "chatForm", "chatInput",
+  "lossValue", "resolutionValue", "sourceValue", "availableBitrateValue", "frameDropsValue", "limitationValue", "routeStatusValue", "routeSwitchesValue", "hostDiagnostics", "diagnosticList", "chatLog", "chatForm", "chatInput",
   "inviteLabel", "inviteRole", "inviteHours", "createInvite", "inviteResult", "newInviteLink", "copyNewInvite",
   "inviteList", "endRoom", "toast", "busyOverlay", "captionOverlay", "captionSelect", "captionFile",
   "loadCaptions", "deleteCaption", "captionSize", "captionClockToggle", "captionBack", "captionForward", "captionOffset", "sourceThrottleWarning",
@@ -33,6 +35,10 @@ const state = {
   myId: null,
   participants: [],
   pc: null,
+  pendingSfuPc: null,
+  sfuStream: null,
+  sfuReady: false,
+  sfuDisconnectTimer: null,
   sessionId: "",
   localStream: null,
   media: null,
@@ -51,6 +57,13 @@ const state = {
   directPeers: new Map(),
   directPc: null,
   directStream: null,
+  pendingDirectPc: null,
+  pendingDirectStream: null,
+  directReady: false,
+  directCooldownUntil: 0,
+  directFallbackPc: null,
+  directPeerCooldowns: new Map(),
+  directActivationGeneration: 0,
   directFallbackTimers: new Map(),
   directRetryTimers: new Map(),
   directRetryAttempts: new Map(),
@@ -74,6 +87,9 @@ const state = {
   sfuSwitchPromise: Promise.resolve(),
   sfuStandbyTimer: null,
   turnNoticeShown: false,
+  activeRoute: "none",
+  routeSwitches: 0,
+  routeReason: "Preparing both routes",
 };
 
 function getClientId() {
@@ -104,6 +120,92 @@ function setConnection(text, mode = "") {
   ui.connectionText.textContent = text;
   ui.connectionPill.classList.toggle("online", mode === "online");
   ui.connectionPill.classList.toggle("warn", mode === "warn");
+}
+
+function updateRouteStatus(reason = state.routeReason) {
+  state.routeReason = reason;
+  if (ui.routeStatusValue) {
+    ui.routeStatusValue.textContent = reason;
+    ui.routeStatusValue.title = reason;
+  }
+  if (ui.routeSwitchesValue) ui.routeSwitchesValue.textContent = String(state.routeSwitches);
+}
+
+function videoHasFrame(video) {
+  return Boolean(video?.srcObject && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0);
+}
+
+function waitForVideoFrame(video, timeoutMs = FIRST_FRAME_TIMEOUT_MS) {
+  if (videoHasFrame(video)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let settled = false;
+    let frameHandle = 0;
+    const finish = (ready) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      video.removeEventListener("loadeddata", check);
+      video.removeEventListener("playing", check);
+      if (frameHandle && video.cancelVideoFrameCallback) video.cancelVideoFrameCallback(frameHandle);
+      resolve(ready);
+    };
+    const check = () => {
+      if (videoHasFrame(video)) finish(true);
+    };
+    const timeout = setTimeout(() => finish(videoHasFrame(video)), timeoutMs);
+    video.addEventListener("loadeddata", check);
+    video.addEventListener("playing", check);
+    if (video.requestVideoFrameCallback) {
+      frameHandle = video.requestVideoFrameCallback(() => finish(true));
+    }
+  });
+}
+
+async function warmVideo(video, stream) {
+  if (video.srcObject !== stream) video.srcObject = stream;
+  video.muted = true;
+  try { await video.play(); } catch {}
+  return waitForVideoFrame(video);
+}
+
+async function switchViewerRoute(route, reason) {
+  if (state.role !== "viewer") return false;
+  const target = route === "direct" ? ui.directVideo : ui.remoteVideo;
+  const ready = route === "direct"
+    ? state.directReady && state.directPc?.connectionState === "connected"
+    : state.sfuReady && state.pc?.connectionState === "connected";
+  if (!ready || !videoHasFrame(target)) return false;
+
+  const previousRoute = state.activeRoute;
+  // Mute both routes before changing layers so a same-tick switch never
+  // produces doubled dialogue from paths with slightly different latency.
+  ui.directVideo.muted = true;
+  ui.remoteVideo.muted = true;
+  ui.directVideo.classList.toggle("is-active", route === "direct");
+  ui.remoteVideo.classList.toggle("is-active", route === "sfu");
+  ui.previewVideo.classList.remove("is-active");
+  target.muted = false;
+  target.controls = true;
+  try { await target.play(); } catch { toast("Tap the video once to enable audio"); }
+  ui.stageEmpty.classList.add("hidden");
+  setVisible(ui.liveBadge, true);
+  if (previousRoute !== "none" && previousRoute !== route) state.routeSwitches += 1;
+  state.activeRoute = route;
+  updateRouteStatus(reason);
+  setConnection(route === "direct" ? "Direct stream connected" : "Backup stream connected", "online");
+  state.previousRtp.clear();
+  startStats();
+  return true;
+}
+
+function showHostPreview(stream) {
+  ui.previewVideo.srcObject = stream;
+  ui.previewVideo.classList.add("is-active");
+  ui.remoteVideo.classList.remove("is-active");
+  ui.directVideo.classList.remove("is-active");
+  ui.stageEmpty.classList.add("hidden");
+  state.activeRoute = "host";
+  updateRouteStatus("Publishing SFU and preparing direct viewer routes");
 }
 
 let toastTimer;
@@ -565,6 +667,16 @@ function clearDirectPresenceTimer(viewerId) {
 function scheduleDirectRetry(viewerId) {
   if (state.role !== "host" || !state.localStream || !directFanoutAvailable() || !directViewerIds().includes(viewerId)) return;
   if (state.directPeers.has(viewerId) || state.directRetryTimers.has(viewerId)) return;
+  const cooldownUntil = state.directPeerCooldowns.get(viewerId) || 0;
+  if (cooldownUntil > Date.now()) {
+    const delay = cooldownUntil - Date.now();
+    state.directRetryTimers.set(viewerId, setTimeout(() => {
+      state.directRetryTimers.delete(viewerId);
+      startHostDirectPeer(viewerId);
+    }, delay));
+    return;
+  }
+  state.directPeerCooldowns.delete(viewerId);
   const attempt = state.directRetryAttempts.get(viewerId) || 0;
   const delay = DIRECT_RETRY_DELAYS_MS[Math.min(attempt, DIRECT_RETRY_DELAYS_MS.length - 1)];
   state.directRetryAttempts.set(viewerId, attempt + 1);
@@ -577,12 +689,11 @@ function scheduleDirectRetry(viewerId) {
 function resetHostDirectPeer(viewerId) {
   if (state.role !== "host") return;
   const pc = state.directPeers.get(viewerId);
-  if (!pc) return;
   state.directPeers.delete(viewerId);
   clearDirectFallbackTimer(viewerId);
   clearDirectDisconnectTimer(viewerId);
   clearDirectPresenceTimer(viewerId);
-  try { pc.close(); } catch {}
+  if (pc) try { pc.close(); } catch {}
 }
 
 function configureDirectPeer(pc, targetId) {
@@ -590,15 +701,15 @@ function configureDirectPeer(pc, targetId) {
     if (pc.connectionState === "connected") {
       clearDirectDisconnectTimer(targetId);
       clearDirectRetryTimer(targetId, true);
-      if (state.role === "viewer" && state.directPc === pc) activateDirectViewer(pc);
+      if (state.role === "viewer" && (state.directPc === pc || state.pendingDirectPc === pc)) {
+        activateDirectViewer(pc, targetId);
+      }
       if (state.role === "host" && state.directPeers.get(targetId) === pc) {
         clearDirectFallbackTimer(targetId);
         toast("Direct small-room route connected");
-        scheduleSfuStandbyIfAllDirect();
       }
     }
     if (pc.connectionState === "disconnected") {
-      requestSfuStandby(false);
       clearDirectDisconnectTimer(targetId);
       state.directDisconnectTimers.set(targetId, setTimeout(() => {
         if (pc.connectionState !== "disconnected") return;
@@ -607,24 +718,30 @@ function configureDirectPeer(pc, targetId) {
           try { pc.close(); } catch {}
           scheduleDirectRetry(targetId);
         }
-        if (state.role === "viewer" && state.directPc === pc) fallbackFromDirect(pc, targetId);
+        if (state.role === "viewer" && state.pendingDirectPc === pc) closePendingDirect(pc);
+        if (state.role === "viewer" && state.directPc === pc) fallbackFromDirect(pc, targetId, "Direct route stayed disconnected");
       }, DIRECT_DISCONNECT_GRACE_MS));
     }
     if (["failed", "closed"].includes(pc.connectionState)) {
-      requestSfuStandby(false);
       clearDirectDisconnectTimer(targetId);
       if (state.role === "host" && state.directPeers.get(targetId) === pc) {
         clearDirectFallbackTimer(targetId);
         state.directPeers.delete(targetId);
         scheduleDirectRetry(targetId);
       }
-      if (state.role === "viewer" && state.directPc === pc) fallbackFromDirect(pc, targetId);
+      if (state.role === "viewer" && state.pendingDirectPc === pc) closePendingDirect(pc);
+      if (state.role === "viewer" && state.directPc === pc) fallbackFromDirect(pc, targetId, `Direct route ${pc.connectionState}`);
     }
   });
 }
 
 async function startHostDirectPeer(viewerId) {
   if (!state.localStream || state.directPeers.has(viewerId) || !directFanoutAvailable()) return;
+  const cooldownUntil = state.directPeerCooldowns.get(viewerId) || 0;
+  if (cooldownUntil > Date.now()) {
+    scheduleDirectRetry(viewerId);
+    return;
+  }
   try {
     const pc = new RTCPeerConnection({ iceServers: await getIceServers(), bundlePolicy: "max-bundle", iceTransportPolicy: "all" });
     state.directPeers.set(viewerId, pc);
@@ -676,23 +793,36 @@ async function startHostDirectPeer(viewerId) {
 
 async function acceptDirectOffer(from, description) {
   if (state.role !== "viewer" || !directFanoutAvailable()) return;
-  closeViewerDirect(false);
+  if (state.directCooldownUntil > Date.now()) {
+    sendSocket({
+      type: "p2p:signal",
+      to: from,
+      signal: { kind: "defer", retryAfterMs: state.directCooldownUntil - Date.now() },
+    });
+    return;
+  }
+  if (state.directPc?.connectionState === "connected" && state.activeRoute === "direct") return;
+  closePendingDirect();
   try {
     const pc = new RTCPeerConnection({ iceServers: await getIceServers(), bundlePolicy: "max-bundle", iceTransportPolicy: "all" });
     const stream = new MediaStream();
-    state.directPc = pc;
-    state.directStream = stream;
+    state.pendingDirectPc = pc;
+    state.pendingDirectStream = stream;
     configureDirectPeer(pc, from);
-    pc.addEventListener("track", ({ track }) => stream.addTrack(track));
+    pc.addEventListener("track", ({ track }) => {
+      stream.addTrack(track);
+      activateDirectViewer(pc, from);
+    });
     await pc.setRemoteDescription(description);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     await waitForIceGathering(pc);
-    if (state.directPc !== pc) return;
+    if (state.pendingDirectPc !== pc) return;
     sendSocket({ type: "p2p:signal", to: from, signal: { kind: "answer", description: pc.localDescription } });
+    activateDirectViewer(pc, from);
   } catch (error) {
     console.warn("Direct route failed; keeping SFU playback", error);
-    closeViewerDirect(false);
+    closePendingDirect();
   }
 }
 
@@ -710,7 +840,7 @@ async function handleDirectSignal(message) {
       return;
     }
     if (signal.kind === "candidate") {
-      const pc = state.role === "host" ? state.directPeers.get(from) : state.directPc;
+      const pc = state.role === "host" ? state.directPeers.get(from) : state.pendingDirectPc || state.directPc;
       if (pc && signal.candidate) await pc.addIceCandidate(signal.candidate);
       return;
     }
@@ -719,33 +849,73 @@ async function handleDirectSignal(message) {
       resetHostDirectPeer(from);
       scheduleDirectRetry(from);
     }
+    if (signal.kind === "defer" && state.role === "host") {
+      const retryAfterMs = Math.max(60_000, Math.min(DIRECT_FAILURE_COOLDOWN_MS, Number(signal.retryAfterMs) || DIRECT_FAILURE_COOLDOWN_MS));
+      state.directPeerCooldowns.set(from, Date.now() + retryAfterMs);
+      clearDirectRetryTimer(from);
+      resetHostDirectPeer(from);
+      scheduleDirectRetry(from);
+    }
   } catch (error) {
     console.warn("Ignored invalid direct-media signal", error);
   }
 }
 
-function activateDirectViewer(pc) {
-  if (state.directPc !== pc || !state.directStream) return;
-  if (state.pc) {
-    try { state.pc.close(); } catch {}
-    state.pc = null;
-    state.sessionId = "";
+async function activateDirectViewer(pc, hostId = "") {
+  const isPending = state.pendingDirectPc === pc;
+  const stream = isPending ? state.pendingDirectStream : state.directStream;
+  if (!stream || pc.connectionState !== "connected" || !stream.getVideoTracks().length) return;
+  const generation = ++state.directActivationGeneration;
+  const ready = await warmVideo(ui.directVideo, stream);
+  if (!ready || generation !== state.directActivationGeneration) return;
+  if (isPending && state.pendingDirectPc !== pc) return;
+  if (!isPending && state.directPc !== pc) return;
+
+  const previousPc = state.directPc;
+  if (isPending) {
+    state.directPc = pc;
+    state.directStream = stream;
+    state.pendingDirectPc = null;
+    state.pendingDirectStream = null;
   }
-  state.previousRtp.clear();
-  ui.remoteVideo.srcObject = state.directStream;
-  ui.remoteVideo.style.display = "block";
-  ui.stageEmpty.classList.add("hidden");
-  setVisible(ui.liveBadge, true);
-  ui.remoteVideo.play().catch(() => toast("Tap the video to start audio"));
-  setConnection("Direct stream connected", "online");
-  startStats();
+  state.directReady = true;
+  state.directCooldownUntil = 0;
+  const switched = await switchViewerRoute("direct", "P2P first frame ready · SFU remains hot");
+  if (switched && previousPc && previousPc !== pc) {
+    try { previousPc.close(); } catch {}
+  }
+  if (!switched && hostId) {
+    sendSocket({ type: "p2p:signal", to: hostId, signal: { kind: "defer", retryAfterMs: DIRECT_FAILURE_COOLDOWN_MS } });
+  }
 }
 
-function fallbackFromDirect(pc, hostId = "") {
+async function fallbackFromDirect(pc, hostId = "", reason = "Direct route unavailable") {
   if (state.directPc !== pc) return;
-  closeViewerDirect(false);
-  if (state.media && !state.subscriptionPending) subscribeToBroadcast();
-  if (hostId) sendSocket({ type: "p2p:signal", to: hostId, signal: { kind: "retry" } });
+  if (state.directFallbackPc === pc) return;
+  state.directFallbackPc = pc;
+  state.directCooldownUntil = Date.now() + DIRECT_FAILURE_COOLDOWN_MS;
+  updateRouteStatus(`${reason} · preparing hot SFU fallback`);
+  setConnection("Switching to backup stream", "warn");
+  if (hostId) {
+    sendSocket({
+      type: "p2p:signal",
+      to: hostId,
+      signal: { kind: "defer", retryAfterMs: DIRECT_FAILURE_COOLDOWN_MS },
+    });
+  }
+  if ((!state.sfuReady || state.pc?.connectionState !== "connected") && state.media) await subscribeToBroadcast(true);
+  const switched = await switchViewerRoute("sfu", `${reason} · pinned to SFU for 10 minutes`);
+  if (switched) {
+    state.directFallbackPc = null;
+    closeViewerDirect(false, pc);
+  } else {
+    updateRouteStatus(`${reason} · keeping the last frame while SFU recovers`);
+    setTimeout(() => {
+      if (state.directFallbackPc !== pc || state.directPc !== pc) return;
+      state.directFallbackPc = null;
+      fallbackFromDirect(pc, hostId, reason);
+    }, 3_000);
+  }
 }
 
 function allCurrentViewersAreDirect() {
@@ -756,55 +926,50 @@ function allCurrentViewersAreDirect() {
 }
 
 function scheduleSfuStandbyIfAllDirect() {
-  if (state.role !== "host" || !allCurrentViewersAreDirect()) return;
-  clearTimeout(state.sfuStandbyTimer);
-  state.sfuStandbyTimer = setTimeout(() => {
-    state.sfuStandbyTimer = null;
-    if (allCurrentViewersAreDirect()) requestSfuStandby(true);
-  }, 3_000);
+  // v2.3.2 keeps the SFU publisher warm even while every viewer is on P2P.
+  // Turning sender tracks off saved bandwidth but made fallback visibly black.
+  if (state.role === "host" && allCurrentViewersAreDirect()) updateRouteStatus("Direct viewers active · SFU hot backup publishing");
 }
 
 function requestSfuStandby(standby) {
   if (state.role !== "host") return Promise.resolve();
-  state.sfuStandbyDesired = Boolean(standby);
-  if (!standby && state.sfuStandbyTimer) {
-    clearTimeout(state.sfuStandbyTimer);
-    state.sfuStandbyTimer = null;
-  }
-  state.sfuSwitchPromise = state.sfuSwitchPromise.then(async () => {
-    while (state.sfuStandby !== state.sfuStandbyDesired) {
-      const desired = state.sfuStandbyDesired;
-      const entries = [...state.sfuSenderTracks.entries()].filter(([sender]) => sender && state.pc?.getSenders().includes(sender));
-      if (!entries.length) {
-        state.sfuStandby = false;
-        return;
-      }
-      await Promise.all(entries.map(async ([sender, originalTrack]) => {
-        if (desired && sender.track) await sender.replaceTrack(null);
-        if (!desired && !sender.track && originalTrack?.readyState === "live") await sender.replaceTrack(originalTrack);
-      }));
-      state.sfuStandby = desired;
-      if (desired) toast("Direct route stable; SFU is on standby");
-    }
-  }).catch((error) => {
-    state.sfuStandby = false;
-    state.sfuStandbyDesired = false;
-    console.warn("Could not change SFU standby state", error);
-  });
-  return state.sfuSwitchPromise;
+  state.sfuStandbyDesired = false;
+  state.sfuStandby = false;
+  clearTimeout(state.sfuStandbyTimer);
+  state.sfuStandbyTimer = null;
+  if (standby) updateRouteStatus("SFU hot backup kept live for seamless switching");
+  return Promise.resolve();
 }
 
-function closeViewerDirect(useFallback = true) {
+function closePendingDirect(pc = state.pendingDirectPc) {
+  if (!pc || (state.pendingDirectPc && state.pendingDirectPc !== pc)) return;
+  if (state.pendingDirectPc === pc) {
+    state.pendingDirectPc = null;
+    state.pendingDirectStream = null;
+  }
+  try { pc.close(); } catch {}
+}
+
+function closeViewerDirect(useFallback = true, expectedPc = state.directPc) {
   const pc = state.directPc;
+  if (useFallback && pc && state.activeRoute === "direct") {
+    const host = state.participants.find((participant) => participant.role === "host");
+    fallbackFromDirect(pc, host?.id || "", "Host ended the direct route");
+    return;
+  }
+  if (expectedPc && pc !== expectedPc) return;
   state.directPc = null;
   state.directStream = null;
-  if (pc) {
-    try { pc.close(); } catch {}
+  state.directReady = false;
+  if (state.directFallbackPc === pc) state.directFallbackPc = null;
+  if (pc) try { pc.close(); } catch {}
+  if (ui.directVideo.srcObject) {
+    ui.directVideo.pause();
+    ui.directVideo.srcObject = null;
   }
+  ui.directVideo.classList.remove("is-active");
   state.previousRtp.clear();
-  if (useFallback && state.role === "viewer" && state.media && !state.pc && !state.subscriptionPending) {
-    subscribeToBroadcast();
-  }
+  if (useFallback && state.role === "viewer" && state.media && !state.sfuReady && !state.subscriptionPending) subscribeToBroadcast(true);
 }
 
 function closeAllDirectConnections(notifyPeers = true) {
@@ -813,6 +978,7 @@ function closeAllDirectConnections(notifyPeers = true) {
   for (const timer of state.directRetryTimers.values()) clearTimeout(timer);
   state.directRetryTimers.clear();
   state.directRetryAttempts.clear();
+  state.directPeerCooldowns.clear();
   for (const timer of state.directDisconnectTimers.values()) clearTimeout(timer);
   state.directDisconnectTimers.clear();
   for (const timer of state.directPresenceTimers.values()) clearTimeout(timer);
@@ -825,6 +991,7 @@ function closeAllDirectConnections(notifyPeers = true) {
       try { pc.close(); } catch {}
     }
   } else {
+    closePendingDirect();
     closeViewerDirect(false);
   }
 }
@@ -1056,9 +1223,9 @@ async function getIceServers() {
   return result.iceServers || [{ urls: ["stun:stun.cloudflare.com:3478"] }];
 }
 
-async function createMediaSession() {
+async function createMediaSession(activate = true) {
   const result = await api(`/api/rooms/${state.roomId}/media/session`, { method: "POST", body: "{}" });
-  state.sessionId = result.sessionId;
+  if (activate) state.sessionId = result.sessionId;
   return result.sessionId;
 }
 
@@ -1082,9 +1249,7 @@ async function startBroadcast() {
       if (state.localStream) stopBroadcast(true);
     }, { once: true }));
 
-    ui.previewVideo.srcObject = stream;
-    ui.previewVideo.style.display = "block";
-    ui.stageEmpty.classList.add("hidden");
+    showHostPreview(stream);
     setVisible(ui.liveBadge, true);
     setVisible(ui.startShare, false);
     setVisible(ui.stopShare, true);
@@ -1134,36 +1299,39 @@ async function startBroadcast() {
   }
 }
 
-async function subscribeToBroadcast() {
-  if (!state.media || state.role !== "viewer" || state.subscriptionPending) return;
-  closePeerConnection();
+async function subscribeToBroadcast(force = false) {
+  if (!state.media || state.role !== "viewer" || state.subscriptionPending) return false;
+  if (!force && state.pc?.connectionState === "connected" && state.sfuReady) return true;
   state.subscriptionPending = true;
   const generation = ++state.subscriptionGeneration;
   const requestedVersion = state.media.version;
-  hideVideos();
-  updateStageEmpty("Connecting to the projection…", "Cloudflare is choosing the best route for you.");
+  const previousPc = state.pc;
+  const previousSessionId = state.sessionId;
+  const previousStream = state.sfuStream;
+  if (state.activeRoute === "none") updateStageEmpty("Connecting to the projection…", "Preparing both the direct and backup routes.");
+  let pc = null;
   try {
     const iceServers = await getIceServers();
-    const sessionId = await createMediaSession();
-    const pc = new RTCPeerConnection({ iceServers, bundlePolicy: "max-bundle" });
-    state.pc = pc;
-    monitorPeerConnection(pc);
+    const sessionId = await createMediaSession(false);
+    pc = new RTCPeerConnection({ iceServers, bundlePolicy: "max-bundle" });
+    state.pendingSfuPc = pc;
     const stream = new MediaStream();
-    ui.remoteVideo.srcObject = stream;
+    const warmupVideo = document.createElement("video");
+    warmupVideo.autoplay = true;
+    warmupVideo.muted = true;
+    warmupVideo.playsInline = true;
+    warmupVideo.srcObject = stream;
     pc.addEventListener("track", ({ track }) => {
       stream.addTrack(track);
-      ui.remoteVideo.style.display = "block";
-      ui.stageEmpty.classList.add("hidden");
-      setVisible(ui.liveBadge, true);
-      ui.remoteVideo.play().catch(() => toast("Tap the video to start audio"));
+      warmupVideo.play().catch(() => {});
     });
     const response = await api(`/api/rooms/${state.roomId}/media/subscribe`, {
       method: "POST",
       body: JSON.stringify({ sessionId, quality: ui.qualitySelect.value }),
     });
-    if (state.media?.version !== requestedVersion || generation !== state.subscriptionGeneration) {
+    if (state.media?.version !== requestedVersion || generation !== state.subscriptionGeneration || state.pendingSfuPc !== pc) {
       pc.close();
-      return;
+      return false;
     }
     if (!response.requiresImmediateRenegotiation || !response.sessionDescription) {
       throw new Error("Cloudflare did not return a subscription offer");
@@ -1177,16 +1345,43 @@ async function subscribeToBroadcast() {
       body: JSON.stringify({ sessionId, sessionDescription: pc.localDescription }),
     });
     await waitForConnected(pc);
-    if (generation !== state.subscriptionGeneration || state.pc !== pc) {
+    const firstFrameReady = await waitForVideoFrame(warmupVideo);
+    if (!firstFrameReady) throw new Error("The backup route connected but produced no video frame");
+    if (generation !== state.subscriptionGeneration || state.pendingSfuPc !== pc) {
       pc.close();
-      return;
+      return false;
+    }
+
+    state.pendingSfuPc = null;
+    state.pc = pc;
+    state.sessionId = sessionId;
+    state.sfuStream = stream;
+    state.sfuReady = true;
+    monitorPeerConnection(pc);
+    await warmVideo(ui.remoteVideo, stream);
+    if (state.activeRoute !== "direct" || state.directPc?.connectionState !== "connected") {
+      await switchViewerRoute("sfu", previousPc ? "SFU replacement ready · old route retired" : "SFU hot backup ready");
+    } else {
+      updateRouteStatus("Direct P2P active · SFU hot backup ready");
+    }
+    if (previousPc && previousPc !== pc) {
+      try { previousPc.close(); } catch {}
     }
     startStats();
+    return true;
   } catch (error) {
     if (generation !== state.subscriptionGeneration) return;
+    if (pc && pc !== previousPc) try { pc.close(); } catch {}
+    if (state.pendingSfuPc === pc) state.pendingSfuPc = null;
+    state.pc = previousPc;
+    state.sessionId = previousSessionId;
+    state.sfuStream = previousStream;
+    state.sfuReady = Boolean(previousPc && previousStream && videoHasFrame(ui.remoteVideo));
     console.error(error);
-    updateStageEmpty("The stream couldn't connect", error.message || "Try again in a moment.");
+    if (state.activeRoute === "none") updateStageEmpty("The stream couldn't connect", error.message || "Try again in a moment.");
+    else updateRouteStatus("Backup route recovery failed · current picture preserved");
     toast(error.message || "Stream connection failed");
+    return false;
   } finally {
     if (generation === state.subscriptionGeneration) state.subscriptionPending = false;
   }
@@ -1195,10 +1390,22 @@ async function subscribeToBroadcast() {
 function monitorPeerConnection(pc) {
   pc.addEventListener("connectionstatechange", () => {
     if (state.pc !== pc) return;
-    if (pc.connectionState === "connected") setConnection("Stream connected", "online");
-    if (["failed", "disconnected"].includes(pc.connectionState)) setConnection("Stream interrupted", "warn");
+    if (pc.connectionState === "connected") {
+      clearTimeout(state.sfuDisconnectTimer);
+      state.sfuDisconnectTimer = null;
+      if (state.activeRoute === "sfu") setConnection("Backup stream connected", "online");
+    }
+    if (pc.connectionState === "disconnected" && state.role === "viewer") {
+      if (state.activeRoute === "sfu") setConnection("Backup route recovering", "warn");
+      clearTimeout(state.sfuDisconnectTimer);
+      state.sfuDisconnectTimer = setTimeout(() => {
+        if (state.pc === pc && pc.connectionState === "disconnected") subscribeToBroadcast(true);
+      }, DIRECT_DISCONNECT_GRACE_MS);
+    }
     if (pc.connectionState === "failed" && state.role === "viewer") {
-      setTimeout(() => state.media && subscribeToBroadcast(), 1500);
+      state.sfuReady = false;
+      if (state.activeRoute === "sfu") setConnection("Backup route recovering", "warn");
+      setTimeout(() => state.media && subscribeToBroadcast(true), 1500);
     }
   });
 }
@@ -1271,11 +1478,19 @@ async function stopBroadcast(notifyServer = true) {
 function closePeerConnection() {
   state.subscriptionGeneration += 1;
   state.subscriptionPending = false;
+  clearTimeout(state.sfuDisconnectTimer);
+  state.sfuDisconnectTimer = null;
   stopStats();
+  if (state.pendingSfuPc) {
+    try { state.pendingSfuPc.close(); } catch {}
+  }
+  state.pendingSfuPc = null;
   if (state.pc) {
     try { state.pc.close(); } catch {}
   }
   state.pc = null;
+  state.sfuStream = null;
+  state.sfuReady = false;
   state.sessionId = "";
   if (state.role === "host") {
     clearTimeout(state.sfuStandbyTimer);
@@ -1290,9 +1505,16 @@ function closePeerConnection() {
 function hideVideos() {
   ui.remoteVideo.pause();
   ui.remoteVideo.srcObject = null;
-  ui.remoteVideo.style.display = "none";
+  ui.remoteVideo.classList.remove("is-active");
+  ui.directVideo.pause();
+  ui.directVideo.srcObject = null;
+  ui.directVideo.classList.remove("is-active");
   ui.previewVideo.srcObject = null;
-  ui.previewVideo.style.display = "none";
+  ui.previewVideo.classList.remove("is-active");
+  state.activeRoute = "none";
+  state.sfuReady = false;
+  state.directReady = false;
+  updateRouteStatus("No active media route");
   setVisible(ui.liveBadge, false);
   ui.stageEmpty.classList.remove("hidden");
 }
@@ -1512,7 +1734,8 @@ async function deleteSelectedCaption() {
 }
 
 function activePlaybackVideo() {
-  return state.role === "host" ? ui.previewVideo : ui.remoteVideo;
+  if (state.role === "host") return ui.previewVideo;
+  return state.activeRoute === "direct" ? ui.directVideo : ui.remoteVideo;
 }
 
 function applyCaptionClock(clock) {
@@ -1674,7 +1897,7 @@ async function collectStats() {
   const directHostPc = state.role === "host"
     ? [...state.directPeers.values()].find((candidate) => candidate.connectionState === "connected")
     : null;
-  const pc = state.role === "viewer" && state.directPc?.connectionState === "connected"
+  const pc = state.role === "viewer" && state.activeRoute === "direct" && state.directPc?.connectionState === "connected"
     ? state.directPc
     : directHostPc || state.pc;
   if (!pc || pc.connectionState === "closed") return;
@@ -1973,7 +2196,7 @@ function bindEvents() {
   ui.captionForward.addEventListener("click", () => adjustCaptionOffset(1));
   ui.fullscreenButton.addEventListener("click", () => ui.stage.requestFullscreen?.());
   ui.pictureInPicture.addEventListener("click", async () => {
-    const video = state.role === "host" ? ui.previewVideo : ui.remoteVideo;
+    const video = activePlaybackVideo();
     try {
       if (document.pictureInPictureElement) await document.exitPictureInPicture();
       else if (video.srcObject) await video.requestPictureInPicture();
@@ -1981,8 +2204,10 @@ function bindEvents() {
   });
   ui.qualitySelect.addEventListener("change", () => {
     localStorage.setItem("cinema.quality", ui.qualitySelect.value);
-    if (state.role === "viewer" && state.directPc?.connectionState === "connected") toast("Direct P2P already uses the host's source quality");
-    else if (state.role === "viewer" && state.media) subscribeToBroadcast();
+    if (state.role === "viewer" && state.directPc?.connectionState === "connected") {
+      toast("Direct quality is unchanged; refreshing the SFU backup");
+      subscribeToBroadcast(true);
+    } else if (state.role === "viewer" && state.media) subscribeToBroadcast(true);
     else if (state.localStream) toast("Restart the broadcast to apply host quality");
   });
   ui.copyGuestLink.addEventListener("click", copyGuestInvite);
@@ -2002,7 +2227,7 @@ function bindEvents() {
   });
   window.addEventListener("online", () => {
     if (state.role === "host") reconcileDirectRoute();
-    else if (state.directPc && state.directPc.connectionState !== "connected") {
+    else if (state.directPc && state.directPc.connectionState !== "connected" && state.directCooldownUntil <= Date.now()) {
       const host = state.participants.find((participant) => participant.role === "host");
       if (host) sendSocket({ type: "p2p:signal", to: host.id, signal: { kind: "retry" } });
     }

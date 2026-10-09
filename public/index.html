@@ -116,7 +116,8 @@
       <div class="cinema-grid">
         <section class="stage-card">
           <div id="stage" class="stage">
-            <video id="remoteVideo" autoplay playsinline controls></video>
+            <video id="remoteVideo" autoplay muted playsinline controls></video>
+            <video id="directVideo" autoplay muted playsinline controls></video>
             <video id="previewVideo" autoplay muted playsinline></video>
             <div id="stageEmpty" class="stage-empty">
               <div class="projector" aria-hidden="true">
@@ -203,6 +204,8 @@
               <div><small>Available bandwidth</small><strong id="availableBitrateValue">-</strong></div>
               <div><small>Frame drops</small><strong id="frameDropsValue">—</strong></div>
               <div><small>Limiter</small><strong id="limitationValue">—</strong></div>
+              <div class="network-wide"><small>Route state</small><strong id="routeStatusValue">Preparing backup route</strong></div>
+              <div><small>Route switches</small><strong id="routeSwitchesValue">0</strong></div>
             </div>
             <details id="hostDiagnostics" class="host-only diagnostics">
               <summary>Everyone's connection</summary>

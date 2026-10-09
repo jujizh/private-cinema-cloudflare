@@ -63,9 +63,8 @@ Interpretation:
 1. Join with one viewer and begin broadcasting.
 2. The viewer should start on the SFU and then switch automatically to
    **Direct P2P** after ICE negotiation completes.
-   After another three seconds, the Host should show the message
-   **Direct route stable; SFU is on standby**. Direct bitrate and resolution
-   should then recover instead of remaining near 480x270.
+   Route state should report **P2P first frame ready · SFU remains hot**. Keep
+   the stream running and confirm the hidden SFU subscription remains connected.
 3. Add a second and then a third viewer. Each should negotiate its own P2P or
    P2P-via-TURN route; monitor Host CPU and upload usage while doing so.
 4. On the same Wi-Fi, expect UDP, low RTT and near-zero loss. If the panel says
@@ -76,12 +75,17 @@ Interpretation:
    to Cloudflare SFU so Host upload does not grow without bound.
 7. Switch one viewer between Wi-Fi and mobile data. It should reconnect under
    the same logical participant identity and negotiate a new media path.
-8. Temporarily block the direct route. The viewer should keep playing over SFU,
-   while the Host retries P2P after 3, 8, 15, 30 and then 60 seconds.
+8. Temporarily block the direct route. Video should change to SFU only after the
+   backup has a decoded frame and must not show the empty-stage placeholder.
+   Route state should say it is pinned to SFU for ten minutes; P2P must not
+   repeatedly reconnect during that cooldown.
 9. Leave the room idle for at least two minutes. The control WebSocket heartbeat
    should prevent idle disconnects.
 10. Briefly interrupt the Host's control connection. Existing media and screen
-   capture should remain alive during the 30-second reconnect grace period.
+    capture should remain alive during the 30-second reconnect grace period.
+11. Repeat step 8 while recording the Viewer screen. A small timing jump is
+    possible because P2P and SFU have different latency, but a multi-second black
+    screen or repeated route flapping is a release blocker.
 
 ## Room Caption Library test
 

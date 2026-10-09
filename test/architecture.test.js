@@ -68,7 +68,7 @@ test("diagnostics report interval loss and the largest active simulcast layer", 
   assert.match(app, /visibilityState !== "visible"[\s\S]*previousRtp\.clear/);
 });
 
-test("small rooms get direct P2P fan-out with SFU fallback", async () => {
+test("small rooms get direct P2P fan-out with a hot SFU fallback", async () => {
   const [app, room] = await Promise.all([read("public/app.js"), read("src/room.js")]);
   assert.match(app, /function reconcileDirectRoute/);
   assert.match(app, /MAX_DIRECT_VIEWERS = 3/);
@@ -78,15 +78,31 @@ test("small rooms get direct P2P fan-out with SFU fallback", async () => {
   assert.match(app, /P2P via TURN/);
   assert.match(app, /directPeers\.values/);
   assert.match(app, /preferH264ForDirectPlayback/);
-  assert.match(app, /state\.media && !state\.subscriptionPending\) subscribeToBroadcast/);
+  assert.match(app, /state\.sfuReady/);
+  assert.match(app, /pendingSfuPc/);
   assert.match(room, /data\.type === "p2p:signal"/);
   assert.match(room, /Only host-to-viewer or viewer-to-host/);
   assert.match(app, /scheduleDirectRetry/);
-  assert.match(app, /signal: \{ kind: "retry" \}/);
-  assert.match(room, /"hangup", "retry"/);
+  assert.match(app, /kind: "defer"/);
+  assert.match(room, /"hangup", "retry", "defer"/);
   assert.match(app, /function requestSfuStandby/);
-  assert.match(app, /sender\.replaceTrack\(null\)/);
+  assert.doesNotMatch(app, /sender\.replaceTrack\(null\)/);
   assert.match(app, /scheduleSfuStandbyIfAllDirect/);
+});
+
+test("route switching is make-before-break and waits for a decoded frame", async () => {
+  const [app, html, styles] = await Promise.all([read("public/app.js"), read("public/index.html"), read("public/styles.css")]);
+  assert.match(html, /id="directVideo"/);
+  assert.match(html, /id="routeStatusValue"/);
+  assert.match(styles, /\.stage video\.is-active/);
+  assert.match(app, /function waitForVideoFrame/);
+  assert.match(app, /requestVideoFrameCallback/);
+  assert.match(app, /async function switchViewerRoute/);
+  assert.match(app, /P2P first frame ready · SFU remains hot/);
+  assert.match(app, /pinned to SFU for 10 minutes/);
+  assert.match(app, /DIRECT_FAILURE_COOLDOWN_MS = 10 \* 60_000/);
+  assert.match(app, /state\.activeRoute !== "direct" \|\| state\.directPc\?\.connectionState !== "connected"/);
+  assert.doesNotMatch(app, /function activateDirectViewer[\s\S]{0,400}state\.pc\.close/);
 });
 
 test("network reconnects preserve logical participant identity", async () => {

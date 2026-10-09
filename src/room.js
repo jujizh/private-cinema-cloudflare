@@ -552,7 +552,7 @@ export class CinemaRoom {
       if (!this.consumeSocketRate(socket, meta, "p2p", 80, 10_000)) return;
       const targetId = safeText(data.to, 80);
       const signal = data.signal && typeof data.signal === "object" ? data.signal : {};
-      const kind = ["offer", "answer", "candidate", "hangup", "retry"].includes(signal.kind) ? signal.kind : "";
+      const kind = ["offer", "answer", "candidate", "hangup", "retry", "defer"].includes(signal.kind) ? signal.kind : "";
       if (!targetId || !kind) return;
 
       let cleanSignal;
@@ -574,6 +574,11 @@ export class CinemaRoom {
             },
           };
         } else return;
+      } else if (kind === "defer") {
+        cleanSignal = {
+          kind,
+          retryAfterMs: Math.max(60_000, Math.min(10 * 60_000, Number(signal.retryAfterMs) || 10 * 60_000)),
+        };
       } else {
         cleanSignal = { kind };
       }
