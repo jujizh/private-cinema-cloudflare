@@ -62,9 +62,10 @@ Interpretation:
 
 1. Join with one viewer and begin broadcasting.
 2. The viewer should start on the SFU and then switch automatically to
-   **Direct P2P** after ICE negotiation completes.
-   Route state should report **P2P first frame ready · SFU remains hot**. Keep
-   the stream running and confirm the hidden SFU subscription remains connected.
+   **Direct P2P** only after ICE negotiation, a decoded frame, and a six-second
+   P2P/SFU comparison complete. Route state should report that the P2P health
+   probe passed. Keep the stream running and confirm the hidden SFU subscription
+   remains connected.
 3. Add a second and then a third viewer. Each should negotiate its own P2P or
    P2P-via-TURN route; monitor Host CPU and upload usage while doing so.
 4. On the same Wi-Fi, expect UDP, low RTT and near-zero loss. If the panel says
@@ -79,8 +80,9 @@ Interpretation:
    should reconnect under the same logical participant identity.
 8. Temporarily block the direct route. Video should change to SFU only after the
    backup has a decoded frame and must not show the empty-stage placeholder.
-   Route state should say it is pinned to SFU for ten minutes; P2P must not
-   repeatedly reconnect during that cooldown.
+   The Viewer should request a hidden P2P probe after one minute, then back off
+   to three and ten minutes after measured failures. SFU must remain visible
+   throughout each probe and switch back only when P2P measures healthier.
 9. Leave the room idle for at least two minutes. The control WebSocket heartbeat
    should prevent idle disconnects.
 10. Briefly interrupt either endpoint's control connection. Existing media and
@@ -97,6 +99,12 @@ Interpretation:
     should be replaced while the last picture remains visible. The Viewer must
     not need to refresh, and a deliberately paused source should not repeatedly
     switch routes.
+14. Create loss on both routes, with SFU worse than P2P. Even after the P2P loss
+    threshold is reached, the Viewer must keep P2P. Then make SFU clearly better
+    and confirm the switch occurs only after its first frame is visible.
+15. Disconnect the Viewer control WebSocket when a P2P retry becomes due. The
+    visible SFU media must continue. After control reconnects, the Viewer should
+    request another background probe without a page refresh.
 
 ## Room Caption Library test
 

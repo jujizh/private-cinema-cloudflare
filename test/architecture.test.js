@@ -66,6 +66,8 @@ test("diagnostics report interval loss and the largest active simulcast layer", 
   assert.match(app, /framesDropped[^\n]*\? Math\.max/);
   assert.match(app, /\$\{quality\.framesDropped\} \/ 5s/);
   assert.match(app, /visibilityState !== "visible"[\s\S]*previousRtp\.clear/);
+  assert.match(app, /function viewerRouteName[\s\S]*"P2P\/TURN"[\s\S]*"SFU\/TURN"/);
+  assert.match(app, /Host → SFU hot backup/);
 });
 
 test("small rooms get direct P2P fan-out with a hot SFU fallback", async () => {
@@ -98,11 +100,25 @@ test("route switching is make-before-break and waits for a decoded frame", async
   assert.match(app, /function waitForVideoFrame/);
   assert.match(app, /requestVideoFrameCallback/);
   assert.match(app, /async function switchViewerRoute/);
-  assert.match(app, /P2P first frame ready · SFU remains hot/);
-  assert.match(app, /pinned to SFU for 10 minutes/);
+  assert.match(app, /P2P health probe passed · SFU remains hot/);
+  assert.match(app, /background P2P retry in/);
   assert.match(app, /DIRECT_FAILURE_COOLDOWN_MS = 10 \* 60_000/);
   assert.match(app, /state\.activeRoute !== "direct" \|\| state\.directPc\?\.connectionState !== "connected"/);
   assert.doesNotMatch(app, /function activateDirectViewer[\s\S]{0,400}state\.pc\.close/);
+});
+
+test("SFU playback stays visible while background P2P is measured and retried adaptively", async () => {
+  const app = await read("public/app.js");
+  assert.match(app, /DIRECT_PROBE_RETRY_DELAYS_MS = \[60_000, 3 \* 60_000, 10 \* 60_000\]/);
+  assert.match(app, /DIRECT_PROBE_SAMPLE_MS = 6_000/);
+  assert.match(app, /async function measureInboundPath/);
+  assert.match(app, /async function validateDirectCandidate/);
+  assert.match(app, /Promise\.all\(\[[\s\S]*measureInboundPath\(pc\)[\s\S]*measureInboundPath\(backupPc\)/);
+  assert.match(app, /state\.activeRoute === "sfu"[\s\S]*validateDirectCandidate\(pc\)/);
+  assert.match(app, /if \(!result\.preferred\)[\s\S]*rejectDirectCandidate/);
+  assert.match(app, /direct\.packetLoss \+ 2 <= backup\.packetLoss/);
+  assert.match(app, /resolutionHealthy/);
+  assert.doesNotMatch(app, /pinned to SFU for 10 minutes/);
 });
 
 test("viewer playback watchdog repairs connected-but-frozen media without a page refresh", async () => {
@@ -140,6 +156,53 @@ test("network reconnects preserve logical participant identity", async () => {
   assert.match(room, /type: "pong"/);
   assert.match(room, /publisherDisconnect/);
   assert.match(room, /async alarm\(\)/);
+});
+
+test("multiple tabs cannot kick each other into an endless reconnect loop", async () => {
+  const app = await read("public/app.js");
+  assert.match(app, /sessionStorage\.getItem\(key\)/);
+  assert.match(app, /event\.code === 4000 && event\.reason === "Replaced by a newer connection"/);
+  assert.match(app, /This room is active in another tab/);
+  assert.match(app, /function noteControlRestored/);
+  assert.match(app, /controlRestoreNotice\.textContent = text/);
+});
+
+test("sustained direct-route packet loss switches only when the hot backup measures better", async () => {
+  const app = await read("public/app.js");
+  assert.match(app, /DIRECT_HIGH_LOSS_PERCENT = 8/);
+  assert.match(app, /DIRECT_HIGH_LOSS_SAMPLES = 2/);
+  assert.match(app, /function monitorDirectPathQuality/);
+  assert.match(app, /async function recoverPoorDirectQuality/);
+  assert.match(app, /async function ensureFreshSfuBackup/);
+  assert.match(app, /measureInboundPath\(pc\)/);
+  assert.match(app, /measureInboundPath\(state\.pc\)/);
+  assert.match(app, /backup\.packetLoss \+ 2 <= direct\.packetLoss/);
+  assert.match(app, /SFU is not measurably better, keeping P2P/);
+  assert.match(app, /monitorDirectPathQuality\(quality, pc\)/);
+  assert.match(app, /P2P measured \$\{direct\.packetLoss\.toFixed\(1\)\}% loss/);
+});
+
+test("viewer owns adaptive P2P retries and host honors an explicit retry immediately", async () => {
+  const app = await read("public/app.js");
+  assert.match(app, /DIRECT_PROBE_RETRY_DELAYS_MS = \[60_000, 3 \* 60_000, 10 \* 60_000\]/);
+  assert.match(app, /function scheduleViewerDirectProbe/);
+  assert.match(app, /state\.ws\?\.readyState !== WebSocket\.OPEN/);
+  assert.match(app, /scheduleViewerDirectProbe\(15_000, "waiting for the control connection"\)/);
+  assert.match(app, /signal: \{ kind: "retry" \}/);
+  assert.match(app, /state\.directPeerCooldowns\.delete\(from\)/);
+  assert.match(app, /await startHostDirectPeer\(from\)/);
+});
+
+test("candidate probes are generation-safe and P2P is retired only after SFU has a visible frame", async () => {
+  const app = await read("public/app.js");
+  assert.match(app, /state\.media\?\.version === requestedVersion/);
+  assert.match(app, /generation === state\.directActivationGeneration/);
+  assert.match(app, /ui\.directVideo\.srcObject === stream/);
+  assert.match(app, /state\.routeSwitchGeneration/);
+  assert.match(app, /Only retire P2P after the SFU video has produced a real frame/);
+  const switchIndex = app.indexOf('const switched = await switchViewerRoute("sfu"');
+  const deferIndex = app.indexOf('signal: { kind: "defer", retryAfterMs: probeDelay }', switchIndex);
+  assert.ok(switchIndex >= 0 && deferIndex > switchIndex, "defer must be sent only after the SFU switch succeeds");
 });
 
 test("room caption library stores shared SRT or VTT tracks while each endpoint chooses independently", async () => {

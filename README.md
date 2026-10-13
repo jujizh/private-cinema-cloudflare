@@ -69,6 +69,56 @@ No permanent credential belongs in the repository. Put every secret in Cloudflar
 
 See [SECURITY.md](SECURITY.md) for the trust model and [TESTING.md](TESTING.md) for the pre-release checklist.
 
+## v2.3.6 Adaptive P2P return probes
+
+- Falling back to SFU no longer locks a Viewer there for a fixed ten minutes.
+  The Viewer retries P2P after 60 seconds, then three minutes, then ten minutes
+  after repeated failed probes. If the control WebSocket is temporarily down,
+  the Viewer waits and asks again after it reconnects instead of losing the
+  retry forever.
+- Every retry is make-before-break: the SFU video remains visible and audible
+  while a hidden P2P candidate connects and is measured for six seconds.
+- The candidate must decode fresh frames, maintain at least 18 fps, retain a
+  useful resolution relative to the SFU picture, and either stay at or below
+  3% packet loss or materially outperform a bad SFU path. Only then can it
+  replace SFU.
+- A failed P2P probe is discarded without touching the visible SFU connection.
+  A successful probe resets the retry backoff.
+- Sustained P2P loss no longer causes a blind switch. The Viewer measures P2P
+  and SFU over the same interval and changes route only when SFU is demonstrably
+  healthier. A paused/static movie is treated as an inconclusive sample, not a
+  failed network path.
+- P2P is not retired until SFU has decoded and displayed a frame. Probe results
+  are generation-checked so an old candidate cannot override a new movie,
+  connection, or room size; rooms above three Viewers cancel outstanding P2P
+  probes and use SFU fan-out.
+- Host diagnostics now distinguish the Host's always-on SFU backup upload from
+  each Viewer's actual `P2P`, `P2P/TURN`, `SFU`, or `SFU/TURN` route.
+
+This removes the misleading assumption that the Host's SFU publisher status is
+the Viewer's active route and lets cross-border/VPN paths recover back to P2P
+when their network conditions improve.
+
+## v2.3.5 Control-loop and lossy-P2P recovery
+
+- Browser tabs now keep independent participant identities. Reloads and network
+  hand-offs still preserve one tab's identity, but a second tab can no longer
+  start an endless cycle in which both sockets repeatedly replace each other.
+- If a newer tab deliberately replaces an older one, the older page stops
+  reconnecting and clearly says that another tab has taken control.
+- Repeated control reconnections are condensed into one counter in room chat,
+  rather than appending an unlimited list of `Connection restored` messages.
+- A Viewer on direct P2P no longer has to wait for the picture to freeze before
+  recovery begins. Two consecutive five-second samples at 8% packet loss or
+  more trigger verification of the decoded hot SFU backup, followed by a
+  make-before-break switch when that backup is healthy.
+- The capture-source message is styled as a neutral operating tip unless live
+  sender statistics actually detect browser background throttling.
+
+The sender cannot erase packet loss on a remote VPN or Wi-Fi path. This release
+instead stops treating a high-loss P2P connection as healthy and moves the
+Viewer to a verified alternative path before the stream becomes unusable.
+
 ## v2.3.4 Frozen-video recovery
 
 - Viewer playback is no longer considered healthy merely because WebRTC still

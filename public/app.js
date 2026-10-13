@@ -7,11 +7,17 @@ const HEARTBEAT_INTERVAL_MS = 25_000;
 const DIRECT_DISCONNECT_GRACE_MS = 12_000;
 const DIRECT_FAILURE_COOLDOWN_MS = 10 * 60_000;
 const DIRECT_RETRY_DELAYS_MS = [15_000, 60_000, 5 * 60_000, 10 * 60_000];
+const DIRECT_PROBE_RETRY_DELAYS_MS = [60_000, 3 * 60_000, 10 * 60_000];
+const DIRECT_PROBE_SAMPLE_MS = 6_000;
+const DIRECT_PROBE_STABLE_LOSS_PERCENT = 3;
+const DIRECT_PROBE_MAX_IMPROVED_LOSS_PERCENT = 6;
 const FIRST_FRAME_TIMEOUT_MS = 12_000;
 const MEDIA_WATCHDOG_INTERVAL_MS = 2_500;
 const MEDIA_STALL_WITH_AUDIO_MS = 7_500;
 const MEDIA_STALL_HARD_MS = 15_000;
 const MEDIA_RECOVERY_COOLDOWN_MS = 12_000;
+const DIRECT_HIGH_LOSS_PERCENT = 8;
+const DIRECT_HIGH_LOSS_SAMPLES = 2;
 
 const ui = Object.fromEntries([
   "connectionPill", "connectionText", "entryView", "inviteEntry", "ownerEntry", "ownerDashboard", "closedEntry",
@@ -68,6 +74,12 @@ const state = {
   directFallbackPc: null,
   directPeerCooldowns: new Map(),
   directActivationGeneration: 0,
+  directProbePc: null,
+  directProbePromise: null,
+  directProbeFailures: 0,
+  lastDirectProbe: null,
+  directProbeTimer: null,
+  directProbeScheduleGeneration: 0,
   directFallbackTimers: new Map(),
   directRetryTimers: new Map(),
   directRetryAttempts: new Map(),
@@ -92,6 +104,7 @@ const state = {
   sfuStandbyTimer: null,
   turnNoticeShown: false,
   activeRoute: "none",
+  routeSwitchGeneration: 0,
   routeSwitches: 0,
   routeReason: "Preparing both routes",
   hasWelcomed: false,
@@ -99,14 +112,22 @@ const state = {
   mediaProgress: new WeakMap(),
   stallRecoveryPromise: null,
   lastStallRecoveryAt: 0,
+  directHighLossSamples: 0,
+  controlRestoreCount: 0,
+  controlRestoreNotice: null,
+  lastControlClose: null,
 };
 
 function getClientId() {
-  const key = "cinema.clientId";
-  let value = localStorage.getItem(key);
+  // A participant identity must survive refreshes and network hand-offs, but it
+  // must not be shared by every cinema tab. A localStorage id made two open
+  // tabs continually replace each other's WebSocket connection.
+  const key = "cinema.tabClientId";
+  let value = sessionStorage.getItem(key);
   if (!value) {
-    value = crypto.randomUUID();
-    localStorage.setItem(key, value);
+    value = localStorage.getItem("cinema.clientId") || crypto.randomUUID();
+    sessionStorage.setItem(key, value);
+    localStorage.removeItem("cinema.clientId");
   }
   return value;
 }
@@ -179,27 +200,38 @@ async function warmVideo(video, stream) {
 
 async function switchViewerRoute(route, reason) {
   if (state.role !== "viewer") return false;
+  const generation = ++state.routeSwitchGeneration;
   const target = route === "direct" ? ui.directVideo : ui.remoteVideo;
+  const targetPc = route === "direct" ? state.directPc : state.pc;
   const ready = route === "direct"
     ? state.directReady && state.directPc?.connectionState === "connected"
     : state.sfuReady && state.pc?.connectionState === "connected";
   if (!ready || !videoHasFrame(target)) return false;
 
+  target.muted = true;
+  target.controls = true;
+  try { await target.play(); } catch { toast("Tap the video once to enable audio"); }
+  const currentPc = route === "direct" ? state.directPc : state.pc;
+  if (generation !== state.routeSwitchGeneration || currentPc !== targetPc || !videoHasFrame(target)) return false;
+
   const previousRoute = state.activeRoute;
-  // Mute both routes before changing layers so a same-tick switch never
-  // produces doubled dialogue from paths with slightly different latency.
+  // Commit the visible route only after the replacement has produced a frame.
+  // This prevents an older async switch from overwriting a newer route.
   ui.directVideo.muted = true;
   ui.remoteVideo.muted = true;
   ui.directVideo.classList.toggle("is-active", route === "direct");
   ui.remoteVideo.classList.toggle("is-active", route === "sfu");
   ui.previewVideo.classList.remove("is-active");
   target.muted = false;
-  target.controls = true;
-  try { await target.play(); } catch { toast("Tap the video once to enable audio"); }
   ui.stageEmpty.classList.add("hidden");
   setVisible(ui.liveBadge, true);
   if (previousRoute !== "none" && previousRoute !== route) state.routeSwitches += 1;
   state.activeRoute = route;
+  if (route === "direct") {
+    cancelScheduledDirectProbe();
+  } else if (state.media && directFanoutAvailable() && !state.directPc && !state.pendingDirectPc) {
+    scheduleViewerDirectProbe(30_000, "waiting for the first background P2P probe");
+  }
   state.mediaProgress.delete(route === "direct" ? state.directPc : state.pc);
   updateRouteStatus(reason);
   setConnection(route === "direct" ? "Direct stream connected" : "Backup stream connected", "online");
@@ -287,13 +319,7 @@ async function recoverStalledPlayback(route, pc, stalledForMs) {
 
     if (route === "direct") {
       const stalledPc = pc;
-      let backupFresh = state.sfuReady
-        && state.pc?.connectionState === "connected"
-        && await waitForInboundVideoProgress(state.pc);
-      if (!backupFresh && state.media) {
-        const replaced = await subscribeToBroadcast(true);
-        backupFresh = Boolean(replaced && state.sfuReady && state.pc?.connectionState === "connected");
-      }
+      const backupFresh = await ensureFreshSfuBackup();
       if (backupFresh && state.directPc === stalledPc && state.activeRoute === "direct") {
         const host = state.participants.find((participant) => participant.role === "host");
         await fallbackFromDirect(stalledPc, host?.id || "", "P2P video stopped decoding");
@@ -318,6 +344,225 @@ async function recoverStalledPlayback(route, pc, stalledForMs) {
     if (activePc) state.mediaProgress.delete(activePc);
   });
   await state.stallRecoveryPromise;
+}
+
+async function ensureFreshSfuBackup() {
+  let backupFresh = state.sfuReady
+    && state.pc?.connectionState === "connected"
+    && await waitForInboundVideoProgress(state.pc);
+  if (!backupFresh && state.media) {
+    const replaced = await subscribeToBroadcast(true);
+    backupFresh = Boolean(replaced
+      && state.sfuReady
+      && state.pc?.connectionState === "connected"
+      && await waitForInboundVideoProgress(state.pc));
+  }
+  return backupFresh;
+}
+
+async function recoverPoorDirectQuality(pc, packetLoss) {
+  if (state.stallRecoveryPromise || Date.now() - state.lastStallRecoveryAt < MEDIA_RECOVERY_COOLDOWN_MS) return;
+  state.lastStallRecoveryAt = Date.now();
+  state.stallRecoveryPromise = (async () => {
+    if (state.directPc !== pc || state.activeRoute !== "direct") return;
+    setConnection("P2P is losing packets; checking the backup route", "warn");
+    updateRouteStatus(`P2P loss stayed at ${packetLoss.toFixed(1)}% · verifying hot SFU backup`);
+    const backupFresh = await ensureFreshSfuBackup();
+    if (!backupFresh || state.directPc !== pc || state.activeRoute !== "direct") {
+      updateRouteStatus(`P2P loss is ${packetLoss.toFixed(1)}% · backup is not healthier yet, keeping P2P`);
+      return;
+    }
+    const [direct, backup] = await Promise.all([
+      measureInboundPath(pc),
+      measureInboundPath(state.pc),
+    ]);
+    if (state.directPc !== pc || state.activeRoute !== "direct") return;
+    const backupFpsHealthy = !backup.fps || backup.fps >= 18;
+    const backupIsClearlyBetter = backup.usable
+      && backupFpsHealthy
+      && (backup.packetLoss <= DIRECT_PROBE_STABLE_LOSS_PERCENT
+        || (direct.usable && backup.packetLoss + 2 <= direct.packetLoss));
+    if (backupIsClearlyBetter) {
+      const host = state.participants.find((participant) => participant.role === "host");
+      await fallbackFromDirect(
+        pc,
+        host?.id || "",
+        `P2P measured ${direct.packetLoss.toFixed(1)}% loss; SFU measured ${backup.packetLoss.toFixed(1)}%`,
+      );
+    } else {
+      updateRouteStatus(`P2P measured ${direct.packetLoss.toFixed(1)}% loss · SFU is not measurably better, keeping P2P`);
+      state.mediaProgress.delete(pc);
+    }
+  })().catch((error) => {
+    console.warn("Poor direct-route recovery failed", error);
+  }).finally(() => {
+    state.stallRecoveryPromise = null;
+  });
+  await state.stallRecoveryPromise;
+}
+
+function nextDirectProbeDelay() {
+  const index = Math.min(state.directProbeFailures, DIRECT_PROBE_RETRY_DELAYS_MS.length - 1);
+  const delay = DIRECT_PROBE_RETRY_DELAYS_MS[index];
+  state.directProbeFailures += 1;
+  return delay;
+}
+
+function directProbeDelayLabel(delayMs) {
+  if (delayMs < 120_000) return `${Math.round(delayMs / 1000)} seconds`;
+  return `${Math.round(delayMs / 60_000)} minutes`;
+}
+
+function cancelScheduledDirectProbe() {
+  clearTimeout(state.directProbeTimer);
+  state.directProbeTimer = null;
+  state.directProbeScheduleGeneration += 1;
+}
+
+function scheduleViewerDirectProbe(delayMs, reason = "", replace = false) {
+  if (state.role !== "viewer" || !directFanoutAvailable()) return;
+  if (state.directProbeTimer && !replace) return;
+  if (replace) cancelScheduledDirectProbe();
+  const generation = ++state.directProbeScheduleGeneration;
+  state.directProbeTimer = setTimeout(() => {
+    if (generation !== state.directProbeScheduleGeneration) return;
+    state.directProbeTimer = null;
+    if (state.role !== "viewer" || !state.media || state.activeRoute !== "sfu" || !directFanoutAvailable()) return;
+    if (state.pendingDirectPc || state.directProbePromise || state.directPc) {
+      scheduleViewerDirectProbe(15_000, "waiting for the current P2P candidate");
+      return;
+    }
+    if (!state.connected || state.ws?.readyState !== WebSocket.OPEN) {
+      scheduleViewerDirectProbe(15_000, "waiting for the control connection");
+      return;
+    }
+    const host = state.participants.find((participant) => participant.role === "host");
+    if (!host) {
+      scheduleViewerDirectProbe(15_000, "waiting for the host");
+      return;
+    }
+    state.directCooldownUntil = 0;
+    updateRouteStatus(`SFU remains active · requesting a background P2P probe${reason ? ` (${reason})` : ""}`);
+    sendSocket({ type: "p2p:signal", to: host.id, signal: { kind: "retry" } });
+    // If the offer is lost, ask again without increasing the quality-failure
+    // backoff. acceptDirectOffer cancels this deadline as soon as an offer lands.
+    scheduleViewerDirectProbe(30_000, "previous probe offer did not arrive");
+  }, Math.max(1_000, delayMs));
+}
+
+async function inboundVideoSnapshot(pc) {
+  if (!pc || pc.connectionState !== "connected") return null;
+  const reports = await pc.getStats();
+  const candidates = [];
+  reports.forEach((report) => {
+    const kind = report.kind || report.mediaType;
+    if (report.type === "inbound-rtp" && !report.isRemote && kind === "video") candidates.push(report);
+  });
+  candidates.sort((left, right) => (Number(right.bytesReceived) || 0) - (Number(left.bytesReceived) || 0));
+  const video = candidates[0];
+  if (!video) return null;
+  return {
+    at: performance.now(),
+    bytes: Number(video.bytesReceived) || 0,
+    packets: Number(video.packetsReceived) || 0,
+    lost: Math.max(0, Number(video.packetsLost) || 0),
+    frames: Number(video.framesDecoded) || 0,
+    reportedFps: Math.round(Number(video.framesPerSecond) || 0),
+    width: Number(video.frameWidth) || 0,
+    height: Number(video.frameHeight) || 0,
+  };
+}
+
+async function measureInboundPath(pc, durationMs = DIRECT_PROBE_SAMPLE_MS) {
+  const first = await inboundVideoSnapshot(pc);
+  if (!first) return { usable: false, packetLoss: 100, fps: 0, bitrateKbps: 0, width: 0, height: 0 };
+  const deadline = performance.now() + durationMs;
+  while (performance.now() < deadline) {
+    if (pc.connectionState !== "connected") return { usable: false, packetLoss: 100, fps: 0, bitrateKbps: 0, width: 0, height: 0 };
+    await new Promise((resolve) => setTimeout(resolve, Math.min(500, deadline - performance.now())));
+  }
+  const last = await inboundVideoSnapshot(pc);
+  if (!last) return { usable: false, packetLoss: 100, fps: 0, bitrateKbps: 0, width: 0, height: 0 };
+  const elapsedMs = Math.max(1, last.at - first.at);
+  const packets = Math.max(0, last.packets - first.packets);
+  const lost = Math.max(0, last.lost - first.lost);
+  const frames = Math.max(0, last.frames - first.frames);
+  const bytes = Math.max(0, last.bytes - first.bytes);
+  const packetLoss = packets + lost > 0 ? Number(((lost / (packets + lost)) * 100).toFixed(1)) : 0;
+  return {
+    usable: frames > 0 || bytes > 50_000,
+    inactive: frames === 0 && bytes <= 50_000,
+    packetLoss,
+    fps: last.reportedFps || Math.round((frames * 1000) / elapsedMs),
+    bitrateKbps: Math.round((bytes * 8) / elapsedMs),
+    width: last.width,
+    height: last.height,
+  };
+}
+
+async function validateDirectCandidate(pc) {
+  const backupPc = state.sfuReady && state.pc?.connectionState === "connected" ? state.pc : null;
+  updateRouteStatus("SFU remains visible · measuring a background P2P candidate for 6 seconds");
+  const [direct, backup] = await Promise.all([
+    measureInboundPath(pc),
+    backupPc ? measureInboundPath(backupPc) : Promise.resolve(null),
+  ]);
+  const fpsHealthy = !direct.fps || direct.fps >= 18;
+  const minimumDirectWidth = backup?.width ? Math.min(1280, Math.round(backup.width * 0.65)) : 0;
+  const resolutionHealthy = !minimumDirectWidth || !direct.width || direct.width >= minimumDirectWidth;
+  const stable = direct.usable
+    && fpsHealthy
+    && resolutionHealthy
+    && direct.packetLoss <= DIRECT_PROBE_STABLE_LOSS_PERCENT;
+  const improvesBadBackup = direct.usable
+    && fpsHealthy
+    && resolutionHealthy
+    && direct.packetLoss <= DIRECT_PROBE_MAX_IMPROVED_LOSS_PERCENT
+    && backup?.usable
+    && direct.packetLoss + 2 <= backup.packetLoss;
+  const result = {
+    direct,
+    backup,
+    preferred: stable || improvesBadBackup,
+    indeterminate: !direct.usable && (!backup || !backup.usable),
+  };
+  state.lastDirectProbe = result;
+  return result;
+}
+
+function deferDirectAttempt(hostId, reason, indeterminate = false) {
+  const delay = indeterminate ? DIRECT_PROBE_RETRY_DELAYS_MS[0] : nextDirectProbeDelay();
+  state.directCooldownUntil = Date.now() + delay;
+  updateRouteStatus(`SFU stays active · P2P probe rejected (${reason}) · retry in ${directProbeDelayLabel(delay)}`);
+  setConnection("Backup stream connected; P2P will be tested again", "online");
+  if (hostId) {
+    sendSocket({ type: "p2p:signal", to: hostId, signal: { kind: "defer", retryAfterMs: delay } });
+  }
+  scheduleViewerDirectProbe(delay, indeterminate ? "video appears paused" : "previous P2P probe was not healthier", true);
+  return delay;
+}
+
+function rejectDirectCandidate(pc, hostId, result) {
+  const loss = Number.isFinite(result?.direct?.packetLoss) ? `${result.direct.packetLoss}% loss` : "no stable frames";
+  deferDirectAttempt(hostId, loss, Boolean(result?.indeterminate));
+  closeViewerDirect(false, pc);
+}
+
+function monitorDirectPathQuality(quality, pc) {
+  if (state.role !== "viewer" || state.activeRoute !== "direct" || state.directPc !== pc) {
+    state.directHighLossSamples = 0;
+    return;
+  }
+  if (quality.packetLoss >= DIRECT_HIGH_LOSS_PERCENT) {
+    state.directHighLossSamples += 1;
+  } else if (quality.packetLoss <= 3) {
+    state.directHighLossSamples = 0;
+  } else {
+    state.directHighLossSamples = Math.max(0, state.directHighLossSamples - 1);
+  }
+  if (state.directHighLossSamples < DIRECT_HIGH_LOSS_SAMPLES) return;
+  state.directHighLossSamples = 0;
+  recoverPoorDirectQuality(pc, quality.packetLoss);
 }
 
 async function checkViewerPlaybackHealth() {
@@ -430,6 +675,8 @@ async function copyText(text, success = "Copied") {
 }
 
 function showClosed(message) {
+  cancelScheduledDirectProbe();
+  if (state.directPc || state.pendingDirectPc || state.directPeers.size) closeAllDirectConnections(false);
   [ui.inviteEntry, ui.ownerEntry, ui.ownerDashboard].forEach((element) => setVisible(element, false));
   setVisible(ui.closedEntry, true);
   ui.closedMessage.textContent = message;
@@ -662,10 +909,18 @@ function handleSocketClose(event, socket) {
   if (state.ws !== socket) return;
   state.connected = false;
   stopHeartbeat();
+  state.lastControlClose = { code: event.code, reason: event.reason || "network interruption" };
   // The room WebSocket is control/signalling only. A brief control-plane
   // interruption must not tear down a healthy SFU/P2P movie connection or stop
   // the browser's screen-capture permission.
   setConnection("Control connection interrupted; media may continue", "warn");
+  if (event.code === 4000 && event.reason === "Replaced by a newer connection") {
+    // The same logical tab was opened elsewhere. Reconnecting here would kick
+    // the newer socket back out and create an endless replace/reconnect loop.
+    setConnection("This room is active in another tab", "warn");
+    systemMessage("Another tab took over this room. Reload this tab only if you want it to take control.");
+    return;
+  }
   if (state.intentionalClose || [4003, 4004].includes(event.code)) {
     if (event.code === 4003) showClosed("Your access to this screening was removed.");
     if (event.code === 4004) showClosed("This screening has ended.");
@@ -697,12 +952,26 @@ function scheduleReconnect() {
   state.reconnectTimer = setTimeout(async () => {
     try {
       await connectToRoom(true);
-      systemMessage("Connection restored.");
+      noteControlRestored();
     } catch (error) {
       if (["room_ended", "room_expired", "invite_invalid", "room_locked", "client_banned"].includes(error.code)) showClosed(error.message);
       else scheduleReconnect();
     }
   }, delay);
+}
+
+function noteControlRestored() {
+  state.controlRestoreCount += 1;
+  const code = state.lastControlClose?.code || 1006;
+  const text = state.controlRestoreCount === 1
+    ? `Control connection restored (code ${code}).`
+    : `Control connection restored ×${state.controlRestoreCount} (last code ${code}).`;
+  if (state.controlRestoreNotice?.isConnected) {
+    state.controlRestoreNotice.textContent = text;
+    ui.chatLog.scrollTop = ui.chatLog.scrollHeight;
+    return;
+  }
+  state.controlRestoreNotice = systemMessage(text);
 }
 
 function showCinema() {
@@ -887,8 +1156,14 @@ function configureDirectPeer(pc, targetId) {
           try { pc.close(); } catch {}
           scheduleDirectRetry(targetId);
         }
-        if (state.role === "viewer" && state.pendingDirectPc === pc) closePendingDirect(pc);
-        if (state.role === "viewer" && state.directPc === pc) fallbackFromDirect(pc, targetId, "Direct route stayed disconnected");
+        if (state.role === "viewer" && state.pendingDirectPc === pc) {
+          deferDirectAttempt(targetId, "candidate disconnected before it became usable");
+          closePendingDirect(pc);
+        }
+        if (state.role === "viewer" && state.directPc === pc) {
+          if (state.activeRoute === "direct") fallbackFromDirect(pc, targetId, "Direct route stayed disconnected");
+          else rejectDirectCandidate(pc, targetId, { direct: { packetLoss: 100 } });
+        }
       }, DIRECT_DISCONNECT_GRACE_MS));
     }
     if (["failed", "closed"].includes(pc.connectionState)) {
@@ -898,8 +1173,14 @@ function configureDirectPeer(pc, targetId) {
         state.directPeers.delete(targetId);
         scheduleDirectRetry(targetId);
       }
-      if (state.role === "viewer" && state.pendingDirectPc === pc) closePendingDirect(pc);
-      if (state.role === "viewer" && state.directPc === pc) fallbackFromDirect(pc, targetId, `Direct route ${pc.connectionState}`);
+      if (state.role === "viewer" && state.pendingDirectPc === pc) {
+        deferDirectAttempt(targetId, `candidate ${pc.connectionState} before it became usable`);
+        closePendingDirect(pc);
+      }
+      if (state.role === "viewer" && state.directPc === pc) {
+        if (state.activeRoute === "direct") fallbackFromDirect(pc, targetId, `Direct route ${pc.connectionState}`);
+        else rejectDirectCandidate(pc, targetId, { direct: { packetLoss: 100 } });
+      }
     }
   });
 }
@@ -971,7 +1252,9 @@ async function acceptDirectOffer(from, description) {
     return;
   }
   if (state.directPc?.connectionState === "connected" && state.activeRoute === "direct") return;
+  cancelScheduledDirectProbe();
   closePendingDirect();
+  const requestedVersion = state.media?.version;
   try {
     const pc = new RTCPeerConnection({ iceServers: await getIceServers(), bundlePolicy: "max-bundle", iceTransportPolicy: "all" });
     const stream = new MediaStream();
@@ -986,11 +1269,15 @@ async function acceptDirectOffer(from, description) {
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     await waitForIceGathering(pc);
-    if (state.pendingDirectPc !== pc) return;
+    if (state.pendingDirectPc !== pc || state.media?.version !== requestedVersion || !directFanoutAvailable()) {
+      closePendingDirect(pc);
+      return;
+    }
     sendSocket({ type: "p2p:signal", to: from, signal: { kind: "answer", description: pc.localDescription } });
     activateDirectViewer(pc, from);
   } catch (error) {
     console.warn("Direct route failed; keeping SFU playback", error);
+    deferDirectAttempt(from, "candidate negotiation failed");
     closePendingDirect();
   }
 }
@@ -1015,8 +1302,10 @@ async function handleDirectSignal(message) {
     }
     if (signal.kind === "hangup" && state.role === "viewer") closeViewerDirect(true);
     if (signal.kind === "retry" && state.role === "host") {
+      clearDirectRetryTimer(from, true);
+      state.directPeerCooldowns.delete(from);
       resetHostDirectPeer(from);
-      scheduleDirectRetry(from);
+      await startHostDirectPeer(from);
     }
     if (signal.kind === "defer" && state.role === "host") {
       const retryAfterMs = Math.max(60_000, Math.min(DIRECT_FAILURE_COOLDOWN_MS, Number(signal.retryAfterMs) || DIRECT_FAILURE_COOLDOWN_MS));
@@ -1031,50 +1320,102 @@ async function handleDirectSignal(message) {
 }
 
 async function activateDirectViewer(pc, hostId = "") {
+  if (state.directProbePc === pc) return state.directProbePromise;
   const isPending = state.pendingDirectPc === pc;
   const stream = isPending ? state.pendingDirectStream : state.directStream;
   if (!stream || pc.connectionState !== "connected" || !stream.getVideoTracks().length) return;
-  const generation = ++state.directActivationGeneration;
-  const ready = await warmVideo(ui.directVideo, stream);
-  if (!ready || generation !== state.directActivationGeneration) return;
-  if (isPending && state.pendingDirectPc !== pc) return;
-  if (!isPending && state.directPc !== pc) return;
+  const requestedVersion = state.media?.version;
+  state.directProbePc = pc;
+  state.directProbePromise = (async () => {
+    const generation = ++state.directActivationGeneration;
+    const ready = await warmVideo(ui.directVideo, stream);
+    if (!ready || generation !== state.directActivationGeneration) return;
+    if (state.media?.version !== requestedVersion || !directFanoutAvailable()) {
+      if (isPending) closePendingDirect(pc);
+      else closeViewerDirect(false, pc);
+      return;
+    }
+    if (isPending && state.pendingDirectPc !== pc) return;
+    if (!isPending && state.directPc !== pc) return;
 
-  const previousPc = state.directPc;
-  if (isPending) {
-    state.directPc = pc;
-    state.directStream = stream;
-    state.pendingDirectPc = null;
-    state.pendingDirectStream = null;
-  }
-  state.directReady = true;
-  state.directCooldownUntil = 0;
-  const switched = await switchViewerRoute("direct", "P2P first frame ready · SFU remains hot");
-  if (switched && previousPc && previousPc !== pc) {
-    try { previousPc.close(); } catch {}
-  }
-  if (!switched && hostId) {
-    sendSocket({ type: "p2p:signal", to: hostId, signal: { kind: "defer", retryAfterMs: DIRECT_FAILURE_COOLDOWN_MS } });
-  }
+    const previousPc = state.directPc;
+    if (isPending) {
+      state.directPc = pc;
+      state.directStream = stream;
+      state.pendingDirectPc = null;
+      state.pendingDirectStream = null;
+    }
+    state.directReady = true;
+
+    // When an SFU picture is already visible, do not let a merely-connected
+    // P2P candidate take over. Measure both live routes in parallel while the
+    // Viewer continues watching the SFU picture.
+    if (state.activeRoute === "sfu") {
+      const result = await validateDirectCandidate(pc);
+      const hostStillPresent = state.participants.some((participant) => participant.id === hostId && participant.role === "host");
+      const candidateStillCurrent = generation === state.directActivationGeneration
+        && state.media?.version === requestedVersion
+        && state.directPc === pc
+        && state.directStream === stream
+        && ui.directVideo.srcObject === stream
+        && pc.connectionState === "connected"
+        && directFanoutAvailable()
+        && hostStillPresent;
+      if (!candidateStillCurrent) {
+        closeViewerDirect(false, pc);
+        return;
+      }
+      if (!result.preferred) {
+        rejectDirectCandidate(pc, hostId, result);
+        return;
+      }
+      updateRouteStatus(`P2P probe passed (${result.direct.packetLoss}% loss, ${result.direct.fps || "?"} fps) · switching after first frame`);
+    }
+
+    state.directCooldownUntil = 0;
+    state.directProbeFailures = 0;
+    const switched = await switchViewerRoute("direct", "P2P health probe passed · SFU remains hot");
+    if (switched && previousPc && previousPc !== pc) {
+      try { previousPc.close(); } catch {}
+    }
+    if (!switched) {
+      rejectDirectCandidate(pc, hostId, { direct: { packetLoss: 100 } });
+    }
+  })().catch((error) => {
+    console.warn("Direct-route activation probe failed", error);
+    if (state.directPc === pc) rejectDirectCandidate(pc, hostId, null);
+    else if (state.pendingDirectPc === pc) closePendingDirect(pc);
+  }).finally(() => {
+    if (state.directProbePc === pc) {
+      state.directProbePc = null;
+      state.directProbePromise = null;
+    }
+  });
+  return state.directProbePromise;
 }
 
-async function fallbackFromDirect(pc, hostId = "", reason = "Direct route unavailable") {
+async function fallbackFromDirect(pc, hostId = "", reason = "Direct route unavailable", retryAfterMs = 0) {
   if (state.directPc !== pc) return;
   if (state.directFallbackPc === pc) return;
   state.directFallbackPc = pc;
-  state.directCooldownUntil = Date.now() + DIRECT_FAILURE_COOLDOWN_MS;
+  const probeDelay = retryAfterMs || nextDirectProbeDelay();
   updateRouteStatus(`${reason} · preparing hot SFU fallback`);
   setConnection("Switching to backup stream", "warn");
-  if (hostId) {
-    sendSocket({
-      type: "p2p:signal",
-      to: hostId,
-      signal: { kind: "defer", retryAfterMs: DIRECT_FAILURE_COOLDOWN_MS },
-    });
-  }
   if ((!state.sfuReady || state.pc?.connectionState !== "connected") && state.media) await subscribeToBroadcast(true);
-  const switched = await switchViewerRoute("sfu", `${reason} · pinned to SFU for 10 minutes`);
+  const switched = await switchViewerRoute("sfu", `${reason} · SFU active · background P2P retry in ${directProbeDelayLabel(probeDelay)}`);
   if (switched) {
+    // Only retire P2P after the SFU video has produced a real frame and is
+    // visible. Otherwise a failed backup could turn a degraded route into a
+    // black screen.
+    state.directCooldownUntil = Date.now() + probeDelay;
+    if (hostId) {
+      sendSocket({
+        type: "p2p:signal",
+        to: hostId,
+        signal: { kind: "defer", retryAfterMs: probeDelay },
+      });
+    }
+    scheduleViewerDirectProbe(probeDelay, "checking whether P2P has recovered", true);
     state.directFallbackPc = null;
     closeViewerDirect(false, pc);
   } else {
@@ -1082,7 +1423,7 @@ async function fallbackFromDirect(pc, hostId = "", reason = "Direct route unavai
     setTimeout(() => {
       if (state.directFallbackPc !== pc || state.directPc !== pc) return;
       state.directFallbackPc = null;
-      fallbackFromDirect(pc, hostId, reason);
+      fallbackFromDirect(pc, hostId, reason, probeDelay);
     }, 3_000);
   }
 }
@@ -1112,9 +1453,14 @@ function requestSfuStandby(standby) {
 
 function closePendingDirect(pc = state.pendingDirectPc) {
   if (!pc || (state.pendingDirectPc && state.pendingDirectPc !== pc)) return;
+  state.directActivationGeneration += 1;
   if (state.pendingDirectPc === pc) {
     state.pendingDirectPc = null;
     state.pendingDirectStream = null;
+  }
+  if (state.directProbePc === pc) {
+    state.directProbePc = null;
+    state.directProbePromise = null;
   }
   try { pc.close(); } catch {}
 }
@@ -1127,9 +1473,14 @@ function closeViewerDirect(useFallback = true, expectedPc = state.directPc) {
     return;
   }
   if (expectedPc && pc !== expectedPc) return;
+  state.directActivationGeneration += 1;
   state.directPc = null;
   state.directStream = null;
   state.directReady = false;
+  if (state.directProbePc === pc) {
+    state.directProbePc = null;
+    state.directProbePromise = null;
+  }
   if (state.directFallbackPc === pc) state.directFallbackPc = null;
   if (pc) try { pc.close(); } catch {}
   if (ui.directVideo.srcObject) {
@@ -1142,6 +1493,10 @@ function closeViewerDirect(useFallback = true, expectedPc = state.directPc) {
 }
 
 function closeAllDirectConnections(notifyPeers = true) {
+  cancelScheduledDirectProbe();
+  state.directActivationGeneration += 1;
+  state.directProbeFailures = 0;
+  state.directCooldownUntil = 0;
   for (const timer of state.directFallbackTimers.values()) clearTimeout(timer);
   state.directFallbackTimers.clear();
   for (const timer of state.directRetryTimers.values()) clearTimeout(timer);
@@ -1204,7 +1559,18 @@ function reconcileDirectRoute() {
     scheduleSfuStandbyIfAllDirect();
     return;
   }
-  if (!directFanoutAvailable() && state.directPc) closeViewerDirect(true);
+  if (!directFanoutAvailable()) {
+    cancelScheduledDirectProbe();
+    state.directActivationGeneration += 1;
+    if (state.pendingDirectPc) closePendingDirect();
+    if (state.directPc) closeViewerDirect(true);
+    state.directProbeFailures = 0;
+    return;
+  }
+  if (state.activeRoute === "sfu" && !state.directPc && !state.pendingDirectPc && !state.directProbeTimer) {
+    const delay = Math.max(1_000, state.directCooldownUntil - Date.now());
+    scheduleViewerDirectProbe(delay, "small-room P2P is available again");
+  }
 }
 
 function systemMessage(text) {
@@ -1213,6 +1579,7 @@ function systemMessage(text) {
   item.textContent = text;
   ui.chatLog.appendChild(item);
   ui.chatLog.scrollTop = ui.chatLog.scrollHeight;
+  return item;
 }
 
 function addChatMessage(message) {
@@ -1287,6 +1654,13 @@ function updateParticipantQuality(participant) {
   renderParticipants();
 }
 
+function viewerRouteName(route) {
+  if (route === "p2p") return "P2P";
+  if (route === "p2p-turn") return "P2P/TURN";
+  if (route === "turn") return "SFU/TURN";
+  return "SFU";
+}
+
 function renderDiagnostics() {
   if (state.role !== "host") return;
   ui.diagnosticList.replaceChildren();
@@ -1297,8 +1671,9 @@ function renderDiagnostics() {
     name.textContent = participant.name;
     const value = document.createElement("span");
     const quality = participant.quality;
+    const routeName = viewerRouteName(quality?.route);
     value.textContent = quality
-      ? `${quality.state} · ${quality.bitrateKbps || 0} kbps · ${quality.packetLoss || 0}% loss`
+      ? `${quality.state} · ${routeName} · ${quality.bitrateKbps || 0} kbps · ${quality.packetLoss || 0}% loss`
       : "waiting for data";
     row.append(name, value);
     ui.diagnosticList.appendChild(row);
@@ -1674,6 +2049,7 @@ function closePeerConnection() {
 }
 
 function hideVideos() {
+  state.routeSwitchGeneration += 1;
   stopPlaybackWatchdog();
   ui.remoteVideo.pause();
   ui.remoteVideo.srcObject = null;
@@ -2182,6 +2558,7 @@ async function collectStats() {
       sourceFps: Math.round(Number(sourceSettings.frameRate) || 0),
       availableBitrateKbps,
     };
+    monitorDirectPathQuality(quality, pc);
     updateSourceThrottleWarning(quality);
     updateNetworkPanel(quality);
     sendSocket({ type: "quality:report", quality });
@@ -2201,13 +2578,23 @@ function healthState({ packetLoss, rttMs, jitterMs, bitrateKbps, width, fps, con
 function updateNetworkPanel(quality) {
   ui.healthLabel.className = `health-chip ${quality.state}`;
   ui.healthLabel.textContent = quality.state;
-  ui.routeValue.textContent = quality.route === "p2p"
-    ? "Direct P2P"
-    : quality.route === "p2p-turn"
-      ? "P2P via TURN"
-      : quality.route === "turn"
-        ? "SFU via TURN"
-        : "Cloudflare SFU";
+  if (state.role === "host") {
+    ui.routeValue.textContent = quality.route === "p2p"
+      ? "Host → viewer P2P sample"
+      : quality.route === "p2p-turn"
+        ? "Host → viewer via TURN"
+        : quality.route === "turn"
+          ? "Host → SFU backup via TURN"
+          : "Host → SFU hot backup";
+  } else {
+    ui.routeValue.textContent = quality.route === "p2p"
+      ? "Direct P2P"
+      : quality.route === "p2p-turn"
+        ? "P2P via TURN"
+        : quality.route === "turn"
+          ? "SFU via TURN"
+          : "Cloudflare SFU";
+  }
   ui.transportValue.textContent = quality.transport.toUpperCase();
   ui.bitrateValue.textContent = quality.bitrateKbps ? `${quality.bitrateKbps} kbps` : "—";
   ui.latencyValue.textContent = quality.rttMs ? `${quality.rttMs} ms` : "—";
@@ -2326,6 +2713,7 @@ async function endScreening() {
 function leaveRoom() {
   state.intentionalClose = true;
   clearTimeout(state.reconnectTimer);
+  closeAllDirectConnections(false);
   if (state.ws) state.ws.close(1000, "Left room");
   if (state.localStream) state.localStream.getTracks().forEach((track) => track.stop());
   closePeerConnection();
