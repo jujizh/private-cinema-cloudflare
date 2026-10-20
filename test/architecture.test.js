@@ -63,14 +63,14 @@ test("diagnostics report interval loss and the largest active simulcast layer", 
   assert.match(app, /rtpCandidates\.sort/);
   assert.match(app, /lostDelta/);
   assert.match(app, /state\.role === "host" \? rtp\.packetsSent : rtp\.packetsReceived/);
-  assert.match(app, /droppedTotal !== null[\s\S]*Math\.max\(0, droppedTotal - previous\.framesDropped\)/);
-  assert.match(app, /quality\.sampleSeconds/);
+  assert.match(app, /framesDropped[^\n]*\? Math\.max/);
+  assert.match(app, /\$\{quality\.framesDropped\} \/ 5s/);
   assert.match(app, /visibilityState !== "visible"[\s\S]*previousRtp\.clear/);
   assert.match(app, /function viewerRouteName[\s\S]*"P2P\/TURN"[\s\S]*"SFU\/TURN"/);
   assert.match(app, /Host → SFU hot backup/);
 });
 
-test("small rooms get direct P2P fan-out with selectable SFU backup", async () => {
+test("small rooms get direct P2P fan-out with a hot SFU fallback", async () => {
   const [app, room] = await Promise.all([read("public/app.js"), read("src/room.js")]);
   assert.match(app, /function reconcileDirectRoute/);
   assert.match(app, /MAX_DIRECT_VIEWERS = 3/);
@@ -242,7 +242,7 @@ test("room captions have responsive sizing and a host-synchronised playback cloc
   assert.match(player, /"play", "pause", "seeked"/);
 });
 
-test("capture stability hint is available but does not prove browser throttling", async () => {
+test("host is warned when an otherwise healthy browser capture is background-throttled", async () => {
   const [app, html, styles] = await Promise.all([read("public/app.js"), read("public/index.html"), read("public/styles.css")]);
   assert.match(html, /共享源可能被浏览器降速，请把电影标签页移到独立窗口并保持活动/);
   assert.match(app, /function updateSourceThrottleWarning/);

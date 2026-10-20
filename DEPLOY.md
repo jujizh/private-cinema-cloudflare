@@ -1,12 +1,4 @@
-# Deploying v2.3.7 on Cloudflare
-
-## 从 v2.3.6 更新
-
-用本包中的文件覆盖代码仓库并沿用原来的 Cloudflare 部署流程。必须一起更新 `src/room.js`、`public/app.js`、新增的 `public/media-health.js` 和 `public/index.html`，不能只覆盖网页。保留现有 Secrets、Worker 名称、绑定和域名，不需要增加迁移。
-
-部署完成后，Host 与观众都保存必要诊断再刷新，确认页面左上角为 **v2.3.7**。旧房间可以继续用，无需重新创建。刷新会中断现有共享，请在测试或观影间隙更新。
-
-首次测试使用 `Route: Auto`、`Backup: On demand`；如需对比持续热备，观众可切换为 `Hot`。同一房间中只要还有一名观众正在使用/需要 SFU，Host 就不会暂停 SFU。
+# Deploying v2 on Cloudflare
 
 This guide upgrades the existing `jiahao-private-cinema` Worker without changing its Worker name or custom domain.
 

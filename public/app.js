@@ -1,5 +1,3 @@
-import { finite, perFrameMs, actualSourceFps, smoothHealth, viewersConfirmedDirect } from "./media-health.js?v=2.3.7";
-
 const $ = (id) => document.getElementById(id);
 // Small private rooms prefer direct media because it has performed better than
 // the current SFU route in real-world testing. The Host sends one encoded copy
@@ -33,7 +31,6 @@ const ui = Object.fromEntries([
   "inviteLabel", "inviteRole", "inviteHours", "createInvite", "inviteResult", "newInviteLink", "copyNewInvite",
   "inviteList", "endRoom", "toast", "busyOverlay", "captionOverlay", "captionSelect", "captionFile",
   "loadCaptions", "deleteCaption", "captionSize", "captionClockToggle", "captionBack", "captionForward", "captionOffset", "sourceThrottleWarning",
-  "backupMode", "routeMode", "exportDiagnostics", "encodeTimeValue", "decodeTimeValue", "jitterBufferValue", "freezeValue", "senderCountValue", "versionLabel",
 ].map((id) => [id, $(id)]));
 
 const state = {
@@ -119,104 +116,7 @@ const state = {
   controlRestoreCount: 0,
   controlRestoreNotice: null,
   lastControlClose: null,
-  statsBusy: false,
-  healthSample: null,
-  sourceSample: null,
-  diagnosticEvents: [],
-  diagnosticSamples: [],
-  backupReleaseTimer: null,
-  backupRequests: new Map(),
-  sfuWakeUntil: 0,
-  directStarts: new Map(),
-  ownedSenderTracks: new WeakMap(),
-  directOfferGeneration: 0,
-  policyChanging: false,
-  watchdogBusy: false,
-  lastStatsPc: null,
-  statsEpoch: 0,
 };
-
-function diagnosticEvent(type, details = {}) {
-  state.diagnosticEvents.push({ at: new Date().toISOString(), type, ...details });
-  if (state.diagnosticEvents.length > 200) state.diagnosticEvents.shift();
-}
-
-function ownSenderTrack(pc, track) {
-  const clone = track.clone();
-  if (track.kind === "video") clone.contentHint = "motion";
-  const tracks = state.ownedSenderTracks.get(pc) || [];
-  tracks.push(clone);
-  state.ownedSenderTracks.set(pc, tracks);
-  pc.addEventListener("connectionstatechange", () => {
-    if (pc.connectionState === "closed") releaseSenderTracks(pc);
-  });
-  return clone;
-}
-
-function releaseSenderTracks(pc) {
-  for (const track of state.ownedSenderTracks.get(pc) || []) track.stop();
-  state.ownedSenderTracks.delete(pc);
-}
-
-function usesOnDemandBackup() {
-  return ui.backupMode?.value !== "hot";
-}
-
-function clearBackupRelease() {
-  clearTimeout(state.backupReleaseTimer);
-  state.backupReleaseTimer = null;
-}
-
-function scheduleBackupRelease() {
-  clearBackupRelease();
-  if (state.role !== "viewer" || !usesOnDemandBackup() || state.activeRoute !== "direct") return;
-  state.backupReleaseTimer = setTimeout(() => {
-    state.backupReleaseTimer = null;
-    if (!usesOnDemandBackup() || state.activeRoute !== "direct" || state.directPc?.connectionState !== "connected"
-      || state.stallRecoveryPromise || state.subscriptionPending || !state.connected) return;
-    // Never clear the active P2P element or stop its statistics/watchdog.
-    const pc = state.pc;
-    state.subscriptionGeneration += 1;
-    state.pc = null;
-    state.sfuStream = null;
-    state.sfuReady = false;
-    clearTimeout(state.sfuDisconnectTimer);
-    ui.remoteVideo.pause();
-    ui.remoteVideo.srcObject = null;
-    if (pc) pc.close();
-    diagnosticEvent("backup-released");
-    updateRouteStatus("P2P playing · SFU on demand (fallback needs preparation)");
-    collectStats();
-  }, 8_000);
-}
-
-async function wakeSfuPublisher() {
-  const host = state.participants.find((p) => p.role === "host");
-  if (!host || !state.connected) return false;
-  const requestId = crypto.randomUUID();
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => { state.backupRequests.delete(requestId); resolve(false); }, 6_000);
-    state.backupRequests.set(requestId, (ready) => { clearTimeout(timer); state.backupRequests.delete(requestId); resolve(ready); });
-    sendSocket({ type: "p2p:signal", to: host.id, signal: { kind: "backup-needed", requestId, mediaVersion: state.media?.version } });
-  });
-}
-
-function exportDiagnostics() {
-  const payload = {
-    version: "2.3.7", exportedAt: new Date().toISOString(), role: state.role,
-    browser: navigator.userAgent, visibility: document.visibilityState,
-    activeRoute: state.activeRoute, backupMode: ui.backupMode.value, routeMode: ui.routeMode.value,
-    events: state.diagnosticEvents, samples: state.diagnosticSamples,
-    // Exclude tokens, room/invite IDs, SDP, ICE addresses, chat and names.
-    peers: state.participants.map((p) => { const { mediaVersion, ...quality } = p.quality || {}; return { role: p.role, quality }; }),
-  };
-  const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `cinema-2.3.7-${state.role}-${Date.now()}.json`;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 
 function getClientId() {
   // A participant identity must survive refreshes and network hand-offs, but it
@@ -253,7 +153,6 @@ function setConnection(text, mode = "") {
 }
 
 function updateRouteStatus(reason = state.routeReason) {
-  if (reason !== state.routeReason) diagnosticEvent("route-state", { reason });
   state.routeReason = reason;
   if (ui.routeStatusValue) {
     ui.routeStatusValue.textContent = reason;
@@ -328,11 +227,8 @@ async function switchViewerRoute(route, reason) {
   setVisible(ui.liveBadge, true);
   if (previousRoute !== "none" && previousRoute !== route) state.routeSwitches += 1;
   state.activeRoute = route;
-  diagnosticEvent("playback-committed", { route, switches: state.routeSwitches });
-  state.healthSample = null;
   if (route === "direct") {
     cancelScheduledDirectProbe();
-    scheduleBackupRelease();
   } else if (state.media && directFanoutAvailable() && !state.directPc && !state.pendingDirectPc) {
     scheduleViewerDirectProbe(30_000, "waiting for the first background P2P probe");
   }
@@ -451,7 +347,6 @@ async function recoverStalledPlayback(route, pc, stalledForMs) {
 }
 
 async function ensureFreshSfuBackup() {
-  clearBackupRelease();
   let backupFresh = state.sfuReady
     && state.pc?.connectionState === "connected"
     && await waitForInboundVideoProgress(state.pc);
@@ -462,7 +357,6 @@ async function ensureFreshSfuBackup() {
       && state.pc?.connectionState === "connected"
       && await waitForInboundVideoProgress(state.pc));
   }
-  if (state.activeRoute === "direct") scheduleBackupRelease();
   return backupFresh;
 }
 
@@ -596,7 +490,7 @@ async function measureInboundPath(pc, durationMs = DIRECT_PROBE_SAMPLE_MS) {
   const bytes = Math.max(0, last.bytes - first.bytes);
   const packetLoss = packets + lost > 0 ? Number(((lost / (packets + lost)) * 100).toFixed(1)) : 0;
   return {
-    usable: frames > 0,
+    usable: frames > 0 || bytes > 50_000,
     inactive: frames === 0 && bytes <= 50_000,
     packetLoss,
     fps: last.reportedFps || Math.round((frames * 1000) / elapsedMs),
@@ -613,7 +507,7 @@ async function validateDirectCandidate(pc) {
     measureInboundPath(pc),
     backupPc ? measureInboundPath(backupPc) : Promise.resolve(null),
   ]);
-  const fpsHealthy = direct.fps >= 18;
+  const fpsHealthy = !direct.fps || direct.fps >= 18;
   const minimumDirectWidth = backup?.width ? Math.min(1280, Math.round(backup.width * 0.65)) : 0;
   const resolutionHealthy = !minimumDirectWidth || !direct.width || direct.width >= minimumDirectWidth;
   const stable = direct.usable
@@ -672,7 +566,6 @@ function monitorDirectPathQuality(quality, pc) {
 }
 
 async function checkViewerPlaybackHealth() {
-  if (state.watchdogBusy) return;
   if (state.role !== "viewer" || !state.media || !["direct", "sfu"].includes(state.activeRoute)) return;
   if (document.visibilityState !== "visible" || state.stallRecoveryPromise) return;
   const route = state.activeRoute;
@@ -680,9 +573,11 @@ async function checkViewerPlaybackHealth() {
   if (!pc || pc.connectionState !== "connected") return;
 
   const video = route === "direct" ? ui.directVideo : ui.remoteVideo;
-  state.watchdogBusy = true;
+  if (video.paused) {
+    try { await video.play(); } catch {}
+  }
+
   try {
-    if (video.paused) { try { await video.play(); } catch {} }
     const counters = await readInboundMediaCounters(pc);
     if (!counters || pc !== (route === "direct" ? state.directPc : state.pc) || route !== state.activeRoute) return;
     const playbackQuality = video.getVideoPlaybackQuality?.();
@@ -696,8 +591,6 @@ async function checkViewerPlaybackHealth() {
     if (stalledForMs >= threshold) await recoverStalledPlayback(route, pc, stalledForMs);
   } catch (error) {
     console.warn("Playback watchdog sample failed", error);
-  } finally {
-    state.watchdogBusy = false;
   }
 }
 
@@ -1085,8 +978,6 @@ function showCinema() {
   setVisible(ui.entryView, false);
   setVisible(ui.cinemaView, true);
   document.querySelectorAll(".host-only").forEach((element) => setVisible(element, state.role === "host"));
-  document.querySelectorAll(".viewer-only").forEach((element) => setVisible(element, state.role === "viewer"));
-  ui.backupMode.value = localStorage.getItem("cinema.backupMode") === "hot" ? "hot" : "ondemand";
   ui.cinemaTitle.textContent = state.room?.title || "Private screening";
   ui.qualitySelect.value = localStorage.getItem("cinema.quality") || "auto";
   ui.captionSize.value = localStorage.getItem("cinema.captionSize") || "compact";
@@ -1182,7 +1073,6 @@ function directViewerIds() {
 }
 
 function directFanoutAvailable() {
-  if (state.role === "viewer" && ui.routeMode?.value === "sfu") return false;
   const count = directViewerIds().length;
   return count > 0 && count <= MAX_DIRECT_VIEWERS;
 }
@@ -1237,12 +1127,11 @@ function scheduleDirectRetry(viewerId) {
 function resetHostDirectPeer(viewerId) {
   if (state.role !== "host") return;
   const pc = state.directPeers.get(viewerId);
-  state.directStarts.delete(viewerId);
   state.directPeers.delete(viewerId);
   clearDirectFallbackTimer(viewerId);
   clearDirectDisconnectTimer(viewerId);
   clearDirectPresenceTimer(viewerId);
-  if (pc) try { releaseSenderTracks(pc); pc.close(); } catch {}
+  if (pc) try { pc.close(); } catch {}
 }
 
 function configureDirectPeer(pc, targetId) {
@@ -1264,7 +1153,6 @@ function configureDirectPeer(pc, targetId) {
         if (pc.connectionState !== "disconnected") return;
         if (state.role === "host" && state.directPeers.get(targetId) === pc) {
           state.directPeers.delete(targetId);
-          releaseSenderTracks(pc);
           try { pc.close(); } catch {}
           scheduleDirectRetry(targetId);
         }
@@ -1283,8 +1171,6 @@ function configureDirectPeer(pc, targetId) {
       if (state.role === "host" && state.directPeers.get(targetId) === pc) {
         clearDirectFallbackTimer(targetId);
         state.directPeers.delete(targetId);
-        releaseSenderTracks(pc);
-        if (pc.connectionState !== "closed") pc.close();
         scheduleDirectRetry(targetId);
       }
       if (state.role === "viewer" && state.pendingDirectPc === pc) {
@@ -1300,23 +1186,14 @@ function configureDirectPeer(pc, targetId) {
 }
 
 async function startHostDirectPeer(viewerId) {
-  if (state.directStarts.has(viewerId)) return;
-  if (state.participants.find((p) => p.id === viewerId)?.quality?.routeMode === "sfu") return;
   if (!state.localStream || state.directPeers.has(viewerId) || !directFanoutAvailable()) return;
   const cooldownUntil = state.directPeerCooldowns.get(viewerId) || 0;
   if (cooldownUntil > Date.now()) {
     scheduleDirectRetry(viewerId);
     return;
   }
-  const stream = state.localStream;
-  const attempt = {};
-  state.directStarts.set(viewerId, attempt);
-  let pc = null;
   try {
-    const iceServers = await getIceServers();
-    if (state.directStarts.get(viewerId) !== attempt || state.localStream !== stream || state.directPeers.has(viewerId)
-      || !directFanoutAvailable() || !directViewerIds().includes(viewerId)) return;
-    pc = new RTCPeerConnection({ iceServers, bundlePolicy: "max-bundle", iceTransportPolicy: "all" });
+    const pc = new RTCPeerConnection({ iceServers: await getIceServers(), bundlePolicy: "max-bundle", iceTransportPolicy: "all" });
     state.directPeers.set(viewerId, pc);
     configureDirectPeer(pc, viewerId);
     const profile = qualityProfile();
@@ -1331,7 +1208,7 @@ async function startHostDirectPeer(viewerId) {
           networkPriority: "high",
         }];
       }
-      const transceiver = pc.addTransceiver(ownSenderTrack(pc, track), init);
+      const transceiver = pc.addTransceiver(track, init);
       if (track.kind === "video") preferH264ForDirectPlayback(transceiver);
       return transceiver;
     });
@@ -1340,16 +1217,14 @@ async function startHostDirectPeer(viewerId) {
     await pc.setLocalDescription(offer);
     await waitForIceGathering(pc);
     if (state.directPeers.get(viewerId) !== pc || !directFanoutAvailable() || !directViewerIds().includes(viewerId)) {
-      releaseSenderTracks(pc);
       pc.close();
-      if (state.directPeers.get(viewerId) === pc) state.directPeers.delete(viewerId);
+      state.directPeers.delete(viewerId);
       return;
     }
     sendSocket({ type: "p2p:signal", to: viewerId, signal: { kind: "offer", description: pc.localDescription } });
     clearDirectFallbackTimer(viewerId);
     const timer = setTimeout(() => {
       if (state.directPeers.get(viewerId) === pc && pc.connectionState !== "connected") {
-        releaseSenderTracks(pc);
         pc.close();
         state.directPeers.delete(viewerId);
         state.directFallbackTimers.delete(viewerId);
@@ -1359,11 +1234,10 @@ async function startHostDirectPeer(viewerId) {
     state.directFallbackTimers.set(viewerId, timer);
   } catch (error) {
     console.warn("Direct route could not start; SFU remains available", error);
-    if (pc) { releaseSenderTracks(pc); pc.close(); }
-    if (state.directPeers.get(viewerId) === pc) state.directPeers.delete(viewerId);
+    const pc = state.directPeers.get(viewerId);
+    if (pc) pc.close();
+    state.directPeers.delete(viewerId);
     scheduleDirectRetry(viewerId);
-  } finally {
-    if (state.directStarts.get(viewerId) === attempt) state.directStarts.delete(viewerId);
   }
 }
 
@@ -1381,11 +1255,8 @@ async function acceptDirectOffer(from, description) {
   cancelScheduledDirectProbe();
   closePendingDirect();
   const requestedVersion = state.media?.version;
-  const offerGeneration = ++state.directOfferGeneration;
   try {
-    const iceServers = await getIceServers();
-    if (offerGeneration !== state.directOfferGeneration || state.media?.version !== requestedVersion || !directFanoutAvailable()) return;
-    const pc = new RTCPeerConnection({ iceServers, bundlePolicy: "max-bundle", iceTransportPolicy: "all" });
+    const pc = new RTCPeerConnection({ iceServers: await getIceServers(), bundlePolicy: "max-bundle", iceTransportPolicy: "all" });
     const stream = new MediaStream();
     state.pendingDirectPc = pc;
     state.pendingDirectStream = stream;
@@ -1415,22 +1286,6 @@ async function handleDirectSignal(message) {
   const { from, signal } = message;
   if (!from || !signal) return;
   try {
-    if (signal.kind === "backup-ready" && state.role === "viewer") {
-      if (state.participants.some((p) => p.id === from && p.role === "host") && signal.mediaVersion === state.media?.version) {
-        state.backupRequests.get(signal.requestId)?.(true);
-      }
-      return;
-    }
-    if (signal.kind === "backup-needed" && state.role === "host") {
-      if (!state.localStream || signal.mediaVersion !== state.media?.version
-        || !state.participants.some((p) => p.id === from && p.role === "viewer")) return;
-      state.sfuWakeUntil = Date.now() + 30_000;
-      await requestSfuStandby(false);
-      if (!state.sfuStandby && state.localStream && signal.mediaVersion === state.media?.version) {
-        sendSocket({ type: "p2p:signal", to: from, signal: { kind: "backup-ready", requestId: signal.requestId, mediaVersion: signal.mediaVersion } });
-      }
-      return;
-    }
     if (signal.kind === "offer") {
       await acceptDirectOffer(from, signal.description);
       return;
@@ -1447,9 +1302,6 @@ async function handleDirectSignal(message) {
     }
     if (signal.kind === "hangup" && state.role === "viewer") closeViewerDirect(true);
     if (signal.kind === "retry" && state.role === "host") {
-      const viewer = state.participants.find((p) => p.id === from && p.role === "viewer");
-      if (!viewer) return;
-      if (viewer.quality) viewer.quality.routeMode = "auto";
       clearDirectRetryTimer(from, true);
       state.directPeerCooldowns.delete(from);
       resetHostDirectPeer(from);
@@ -1477,12 +1329,7 @@ async function activateDirectViewer(pc, hostId = "") {
   state.directProbePromise = (async () => {
     const generation = ++state.directActivationGeneration;
     const ready = await warmVideo(ui.directVideo, stream);
-    if (generation !== state.directActivationGeneration) return;
-    if (!ready) {
-      if (state.pendingDirectPc === pc) closePendingDirect(pc);
-      rejectDirectCandidate(pc, hostId, null);
-      return;
-    }
+    if (!ready || generation !== state.directActivationGeneration) return;
     if (state.media?.version !== requestedVersion || !directFanoutAvailable()) {
       if (isPending) closePendingDirect(pc);
       else closeViewerDirect(false, pc);
@@ -1497,9 +1344,6 @@ async function activateDirectViewer(pc, hostId = "") {
       state.directStream = stream;
       state.pendingDirectPc = null;
       state.pendingDirectStream = null;
-      // Offers are ignored while an incumbent P2P picture is active. Any old
-      // direct PC here is an invisible retired candidate, not the SFU picture.
-      if (previousPc && previousPc !== pc) previousPc.close();
     }
     state.directReady = true;
 
@@ -1585,40 +1429,26 @@ async function fallbackFromDirect(pc, hostId = "", reason = "Direct route unavai
 }
 
 function allCurrentViewersAreDirect() {
-  const viewers = state.participants.filter((p) => p.role === "viewer");
-  return viewers.length <= MAX_DIRECT_VIEWERS && viewersConfirmedDirect(viewers, state.directPeers, state.media?.version);
+  const viewerIds = directViewerIds();
+  return viewerIds.length > 0 && viewerIds.length <= MAX_DIRECT_VIEWERS && viewerIds.every((viewerId) => {
+    return state.directPeers.get(viewerId)?.connectionState === "connected";
+  });
 }
 
 function scheduleSfuStandbyIfAllDirect() {
-  if (state.role !== "host" || !state.localStream) return;
-  requestSfuStandby(allCurrentViewersAreDirect() && Date.now() >= state.sfuWakeUntil);
+  // v2.3.2 keeps the SFU publisher warm even while every viewer is on P2P.
+  // Turning sender tracks off saved bandwidth but made fallback visibly black.
+  if (state.role === "host" && allCurrentViewersAreDirect()) updateRouteStatus("Direct viewers active · SFU hot backup publishing");
 }
 
 function requestSfuStandby(standby) {
   if (state.role !== "host") return Promise.resolve();
-  state.sfuStandbyDesired = standby;
-  state.sfuSwitchPromise = state.sfuSwitchPromise.catch(() => {}).then(async () => {
-    const desired = state.sfuStandbyDesired;
-    const pc = state.pc;
-    if (!state.localStream || !pc || desired === state.sfuStandby) return;
-    for (const sender of state.sfuSenderTracks.keys()) {
-      const parameters = sender.getParameters();
-      if (!parameters.encodings?.length) continue;
-      parameters.encodings.forEach((encoding) => { encoding.active = !desired; });
-      await sender.setParameters(parameters);
-    }
-    if (state.pc !== pc) return;
-    state.sfuStandby = desired;
-    diagnosticEvent("sfu-publisher", { idle: desired });
-    updateRouteStatus(desired ? "All viewers confirmed P2P · SFU publishing paused" : "SFU publishing active · viewer demand / backup preparation");
-  }).catch((error) => {
-    // Mark the state uncertain so the next wake retries every sender, including
-    // an encoding which may have been paused before another sender failed.
-    state.sfuStandby = true;
-    diagnosticEvent("sfu-standby-failed");
-    console.warn("SFU sender activity change failed", error);
-  });
-  return state.sfuSwitchPromise;
+  state.sfuStandbyDesired = false;
+  state.sfuStandby = false;
+  clearTimeout(state.sfuStandbyTimer);
+  state.sfuStandbyTimer = null;
+  if (standby) updateRouteStatus("SFU hot backup kept live for seamless switching");
+  return Promise.resolve();
 }
 
 function closePendingDirect(pc = state.pendingDirectPc) {
@@ -1663,9 +1493,6 @@ function closeViewerDirect(useFallback = true, expectedPc = state.directPc) {
 }
 
 function closeAllDirectConnections(notifyPeers = true) {
-  clearBackupRelease();
-  state.directStarts.clear();
-  state.directOfferGeneration += 1;
   cancelScheduledDirectProbe();
   state.directActivationGeneration += 1;
   state.directProbeFailures = 0;
@@ -1685,7 +1512,7 @@ function closeAllDirectConnections(notifyPeers = true) {
     state.directPeers.clear();
     for (const [viewerId, pc] of peers) {
       if (notifyPeers) sendSocket({ type: "p2p:signal", to: viewerId, signal: { kind: "hangup" } });
-      try { releaseSenderTracks(pc); pc.close(); } catch {}
+      try { pc.close(); } catch {}
     }
   } else {
     closePendingDirect();
@@ -1714,7 +1541,6 @@ function reconcileDirectRoute() {
           state.directPresenceTimers.delete(viewerId);
           if (directViewerIds().includes(viewerId) || state.directPeers.get(viewerId) !== pc) return;
           state.directPeers.delete(viewerId);
-          releaseSenderTracks(pc);
           try { pc.close(); } catch {}
         }, 30_000));
       }
@@ -1722,7 +1548,6 @@ function reconcileDirectRoute() {
     }
     for (const [viewerId, pc] of state.directPeers) {
       if (!viewerIds.includes(viewerId)) {
-        releaseSenderTracks(pc);
         try { pc.close(); } catch {}
         clearDirectFallbackTimer(viewerId);
         state.directPeers.delete(viewerId);
@@ -1825,11 +1650,8 @@ function renderParticipants() {
 
 function updateParticipantQuality(participant) {
   const index = state.participants.findIndex((item) => item.id === participant.id);
-  const previousMode = index >= 0 ? state.participants[index].quality?.routeMode : null;
   if (index >= 0) state.participants[index] = participant;
   renderParticipants();
-  scheduleSfuStandbyIfAllDirect();
-  if (state.role === "host" && participant.role === "viewer" && previousMode !== participant.quality?.routeMode) reconcileDirectRoute();
 }
 
 function viewerRouteName(route) {
@@ -1849,10 +1671,9 @@ function renderDiagnostics() {
     name.textContent = participant.name;
     const value = document.createElement("span");
     const quality = participant.quality;
-    const routeName = participant.role === "host" ? "Host send sample" : quality?.playbackRoute === "direct"
-      ? viewerRouteName(quality.route) : quality?.playbackRoute === "sfu" ? viewerRouteName(quality.route) : "Unconfirmed";
+    const routeName = viewerRouteName(quality?.route);
     value.textContent = quality
-      ? `${quality.state} · ${routeName} · ${quality.width || "?"}×${quality.height || "?"} · ${quality.fps ?? "?"} fps · ${quality.bitrateKbps || 0} kbps · ${quality.packetLoss ?? "?"}% loss · decode ${quality.decodeTimeMs ?? "?"} ms · freezes +${quality.freezeDelta ?? "?"}`
+      ? `${quality.state} · ${routeName} · ${quality.bitrateKbps || 0} kbps · ${quality.packetLoss || 0}% loss`
       : "waiting for data";
     row.append(name, value);
     ui.diagnosticList.appendChild(row);
@@ -1990,7 +1811,7 @@ async function startBroadcast() {
       if (track.kind === "video") {
         init.sendEncodings = cinemaSfuEncodings(profile);
       }
-      return pc.addTransceiver(ownSenderTrack(pc, track), init);
+      return pc.addTransceiver(track, init);
     });
     state.sfuSenderTracks = new Map(transceivers.map(({ sender }) => [sender, sender.track]));
     state.sfuStandby = false;
@@ -2035,27 +1856,21 @@ async function subscribeToBroadcast(force = false) {
   const previousStream = state.sfuStream;
   if (state.activeRoute === "none") updateStageEmpty("Connecting to the projection…", "Preparing both the direct and backup routes.");
   let pc = null;
-  let warmupVideo = null;
-  let onWarmupTrack = null;
   try {
-    clearBackupRelease();
-    await wakeSfuPublisher();
-    if (generation !== state.subscriptionGeneration || state.media?.version !== requestedVersion) return false;
     const iceServers = await getIceServers();
     const sessionId = await createMediaSession(false);
     pc = new RTCPeerConnection({ iceServers, bundlePolicy: "max-bundle" });
     state.pendingSfuPc = pc;
     const stream = new MediaStream();
-    warmupVideo = document.createElement("video");
+    const warmupVideo = document.createElement("video");
     warmupVideo.autoplay = true;
     warmupVideo.muted = true;
     warmupVideo.playsInline = true;
     warmupVideo.srcObject = stream;
-    onWarmupTrack = ({ track }) => {
+    pc.addEventListener("track", ({ track }) => {
       stream.addTrack(track);
-      if (warmupVideo) warmupVideo.play().catch(() => {});
-    };
-    pc.addEventListener("track", onWarmupTrack);
+      warmupVideo.play().catch(() => {});
+    });
     const response = await api(`/api/rooms/${state.roomId}/media/subscribe`, {
       method: "POST",
       body: JSON.stringify({ sessionId, quality: ui.qualitySelect.value }),
@@ -2114,11 +1929,7 @@ async function subscribeToBroadcast(force = false) {
     toast(error.message || "Stream connection failed");
     return false;
   } finally {
-    // Keep adding tracks: audio can arrive after the first decoded video frame.
-    // Only release the temporary decoder, not the live stream's track handler.
-    if (warmupVideo) { warmupVideo.pause(); warmupVideo.srcObject = null; warmupVideo = null; }
     if (generation === state.subscriptionGeneration) state.subscriptionPending = false;
-    if (state.activeRoute === "direct") scheduleBackupRelease();
   }
 }
 
@@ -2184,7 +1995,6 @@ async function stopBroadcast(notifyServer = true) {
   const sessionId = state.sessionId;
   const localStream = state.localStream;
   state.localStream = null;
-  if (state.pc) releaseSenderTracks(state.pc);
   clearTimeout(state.sfuStandbyTimer);
   state.sfuStandbyTimer = null;
   state.sfuStandbyDesired = false;
@@ -2212,8 +2022,6 @@ async function stopBroadcast(notifyServer = true) {
 }
 
 function closePeerConnection() {
-  clearBackupRelease();
-  for (const resolve of [...state.backupRequests.values()]) resolve(false);
   state.subscriptionGeneration += 1;
   state.subscriptionPending = false;
   clearTimeout(state.sfuDisconnectTimer);
@@ -2224,7 +2032,6 @@ function closePeerConnection() {
   }
   state.pendingSfuPc = null;
   if (state.pc) {
-    releaseSenderTracks(state.pc);
     try { state.pc.close(); } catch {}
   }
   state.pc = null;
@@ -2602,12 +2409,12 @@ function updateSourceThrottleWarning(quality) {
   // explain the reduction.
   const sourceCanProduceMotion = quality.sourceFps >= 24;
   const encodedFpsIsLow = quality.fps > 0 && quality.fps <= 20;
-  const senderIsNotLimited = quality.qualityLimitationReason === "none";
+  const senderIsNotLimited = !["bandwidth", "cpu"].includes(quality.qualityLimitationReason);
   const enoughEstimatedBandwidth = !quality.availableBitrateKbps
     || quality.availableBitrateKbps >= Math.max(3_500, quality.bitrateKbps * 1.25);
   const likelyBrowserThrottle = sourceCanProduceMotion
     && encodedFpsIsLow
-    && quality.packetLoss !== null && quality.packetLoss <= 1
+    && quality.packetLoss <= 1
     && senderIsNotLimited
     && enoughEstimatedBandwidth;
 
@@ -2627,7 +2434,7 @@ function updateSourceThrottleWarning(quality) {
     const now = Date.now();
     if (now - state.sourceThrottleWarnedAt > 60_000) {
       state.sourceThrottleWarnedAt = now;
-      toast("Capture/encode FPS is low — check the source window and desktop stability");
+      toast("The shared movie source appears throttled — move it to its own active window");
     }
   } else if (state.sourceHealthySamples >= 2) {
     ui.sourceThrottleWarning?.classList.remove("is-active");
@@ -2635,7 +2442,6 @@ function updateSourceThrottleWarning(quality) {
 }
 
 async function collectStats() {
-  if (state.statsBusy) return;
   const directHostPc = state.role === "host"
     ? [...state.directPeers.values()].find((candidate) => candidate.connectionState === "connected")
     : null;
@@ -2643,18 +2449,8 @@ async function collectStats() {
     ? state.directPc
     : directHostPc || state.pc;
   if (!pc || pc.connectionState === "closed") return;
-  state.statsBusy = true;
   try {
     const reports = await pc.getStats();
-    if (pc !== (state.role === "viewer" && state.activeRoute === "direct" ? state.directPc
-      : state.role === "host" ? directHostPc || state.pc : state.pc)) return;
-    if (state.role === "host" && directHostPc && ![...state.directPeers.values()].includes(pc)) return;
-    if (state.lastStatsPc !== pc) {
-      state.previousRtp.clear();
-      state.sourceSample = null;
-      state.statsEpoch += 1;
-      state.lastStatsPc = pc;
-    }
     const rtpCandidates = [];
     let pair = null;
     let selectedPairId = "";
@@ -2706,48 +2502,28 @@ async function collectStats() {
       if (transport === "ssl" || transport === "tls") transport = "tls";
     }
     const packetCount = Number(state.role === "host" ? rtp.packetsSent : rtp.packetsReceived) || 0;
-    const rawLost = finite(rtp.packetsLost) ?? finite(remoteInbound?.packetsLost);
-    const lost = Math.max(0, rawLost ?? 0);
-    const packetBaseline = state.role === "host" ? previous?.feedbackPacketCount ?? previous?.packetCount : previous?.packetCount;
-    const packetDelta = previous ? Math.max(0, packetCount - packetBaseline) : packetCount;
+    const lost = Math.max(0, Number(rtp.packetsLost ?? remoteInbound?.packetsLost) || 0);
+    const packetDelta = previous ? Math.max(0, packetCount - previous.packetCount) : packetCount;
     const lostDelta = previous ? Math.max(0, lost - previous.packetsLost) : lost;
     const lossDenominator = state.role === "host" ? packetDelta : packetDelta + lostDelta;
-    const feedbackFresh = state.role !== "host" || !previous || finite(remoteInbound?.timestamp) !== previous.remoteTimestamp;
-    const packetLoss = rawLost !== null && feedbackFresh && lossDenominator > 0
-      ? Number((Math.min(1, lostDelta / lossDenominator) * 100).toFixed(1))
-      : null;
+    const packetLoss = lossDenominator > 0
+      ? Number(((lostDelta / lossDenominator) * 100).toFixed(1))
+      : 0;
     const rttMs = Math.round(1000 * (Number(pair?.currentRoundTripTime) || Number(remoteInbound?.roundTripTime) || 0));
     const jitterMs = Math.round(1000 * (Number(rtp.jitter) || 0));
-    const droppedTotal = finite(rtp.framesDropped);
-    const framesDropped = previous && droppedTotal !== null && previous.framesDropped !== null
-      ? Math.max(0, droppedTotal - previous.framesDropped) : null;
+    const droppedTotal = Number(rtp.framesDropped) || 0;
+    const framesDropped = previous ? Math.max(0, droppedTotal - previous.framesDropped) : 0;
     const qualityLimitationReason = state.role === "host"
-      ? String(rtp.qualityLimitationReason || "unknown")
+      ? String(rtp.qualityLimitationReason || "none")
       : "receiver";
     const codecReport = rtp.codecId ? reports.get(rtp.codecId) : null;
     const codec = String(codecReport?.mimeType || "").split("/").pop().toUpperCase().slice(0, 16);
-    const frameCount = finite(state.role === "host" ? rtp.framesEncoded : rtp.framesDecoded);
-    const elapsed = previous ? now - previous.time : 0;
-    const fps = finite(rtp.framesPerSecond) ?? (previous && elapsed > 0 && frameCount !== null && previous.frameCount !== null && frameCount >= previous.frameCount
-      ? Math.round((frameCount - previous.frameCount) * 1000 / elapsed) : null);
-    const encodeTimeMs = perFrameMs(finite(rtp.totalEncodeTime), frameCount, previous?.encodeTotal, previous?.frameCount);
-    const decodeTimeMs = perFrameMs(finite(rtp.totalDecodeTime), frameCount, previous?.decodeTotal, previous?.frameCount);
-    const jitterBufferMs = perFrameMs(finite(rtp.jitterBufferDelay), finite(rtp.jitterBufferEmittedCount), previous?.bufferTotal, previous?.bufferCount);
-    const freezeTotal = finite(rtp.freezeCount);
-    const freezeDelta = previous && freezeTotal !== null && previous.freezeTotal !== null ? Math.max(0, freezeTotal - previous.freezeTotal) : null;
-    const sourceReport = reports.get(rtp.mediaSourceId) || [...reports.values()].find((r) => r.type === "media-source" && r.kind === "video");
-    const measuredSourceFps = actualSourceFps(sourceReport, state.sourceSample);
-    state.sourceSample = sourceReport ? { frames: finite(sourceReport.frames), timestamp: sourceReport.timestamp } : null;
     state.previousRtp.set(rtp.id, {
       bytes,
       time: now,
       framesDropped: droppedTotal,
       packetCount,
       packetsLost: lost,
-      remoteTimestamp: finite(remoteInbound?.timestamp),
-      feedbackPacketCount: feedbackFresh ? packetCount : previous?.feedbackPacketCount ?? packetCount,
-      frameCount, encodeTotal: finite(rtp.totalEncodeTime), decodeTotal: finite(rtp.totalDecodeTime),
-      bufferTotal: finite(rtp.jitterBufferDelay), bufferCount: finite(rtp.jitterBufferEmittedCount), freezeTotal,
     });
     const sourceSettings = state.role === "host"
       ? state.localStream?.getVideoTracks?.()[0]?.getSettings?.() || {}
@@ -2762,7 +2538,7 @@ async function collectStats() {
         jitterMs,
         bitrateKbps,
         width: Number(rtp.frameWidth) || 0,
-        fps,
+        fps: Math.round(Number(rtp.framesPerSecond) || 0),
         connected: pc.connectionState === "connected",
       }),
       route,
@@ -2773,7 +2549,7 @@ async function collectStats() {
       jitterMs,
       width: Number(rtp.frameWidth) || 0,
       height: Number(rtp.frameHeight) || 0,
-      fps,
+      fps: Math.round(Number(rtp.framesPerSecond) || 0),
       framesDropped,
       qualityLimitationReason,
       codec,
@@ -2781,39 +2557,21 @@ async function collectStats() {
       sourceHeight: Number(sourceSettings.height) || 0,
       sourceFps: Math.round(Number(sourceSettings.frameRate) || 0),
       availableBitrateKbps,
-      measuredSourceFps, encodeTimeMs, decodeTimeMs, jitterBufferMs, freezeDelta,
-      sampleSeconds: previous ? Math.round(elapsed / 100) / 10 : null,
-      playbackRoute: state.role === "viewer" ? state.activeRoute : "host",
-      mediaVersion: state.media?.version || "",
-      needsSfu: state.role !== "viewer" || state.activeRoute !== "direct" || !usesOnDemandBackup() || Boolean(state.pc || state.subscriptionPending || state.stallRecoveryPromise),
-      routeMode: ui.routeMode?.value || "auto",
-      senderCount: state.role === "host" ? state.directPeers.size + (state.sfuStandby ? 0 : Number(Boolean(state.pc))) : null,
-      sfuIdle: state.sfuStandby,
     };
-    quality.rawState = quality.state;
-    state.healthSample = smoothHealth(state.healthSample, quality.rawState, `${state.activeRoute}:${state.statsEpoch}:${rtp.id}`);
-    quality.state = state.healthSample.value;
-    const { mediaVersion, ...diagnosticQuality } = quality;
-    state.diagnosticSamples.push({ at: new Date().toISOString(), visibility: document.visibilityState, ...diagnosticQuality });
-    if (state.diagnosticSamples.length > 240) state.diagnosticSamples.shift();
     monitorDirectPathQuality(quality, pc);
     updateSourceThrottleWarning(quality);
     updateNetworkPanel(quality);
     sendSocket({ type: "quality:report", quality });
-    scheduleSfuStandbyIfAllDirect();
   } catch (error) {
     console.warn("Stats unavailable", error);
-  } finally {
-    state.statsBusy = false;
   }
 }
 
 function healthState({ packetLoss, rttMs, jitterMs, bitrateKbps, width, fps, connected }) {
   if (!connected) return "connecting";
-  if (packetLoss === null && fps === null) return "connecting";
-  if (packetLoss > 8 || rttMs > 650 || jitterMs > 120 || (bitrateKbps && bitrateKbps < 220) || (finite(fps) !== null && fps < 18)) return "poor";
+  if (packetLoss > 8 || rttMs > 650 || jitterMs > 120 || (bitrateKbps && bitrateKbps < 220) || (fps && fps < 18)) return "poor";
   if (packetLoss > 3 || rttMs > 380 || jitterMs > 65 || (bitrateKbps && bitrateKbps < 550) || (width && width <= 320) || (fps && fps < 23)) return "fair";
-  if (packetLoss !== null && packetLoss < 1 && rttMs > 0 && rttMs < 220 && jitterMs < 30) return "excellent";
+  if (packetLoss < 1 && rttMs < 220 && jitterMs < 30) return "excellent";
   return "good";
 }
 
@@ -2840,28 +2598,20 @@ function updateNetworkPanel(quality) {
   ui.transportValue.textContent = quality.transport.toUpperCase();
   ui.bitrateValue.textContent = quality.bitrateKbps ? `${quality.bitrateKbps} kbps` : "—";
   ui.latencyValue.textContent = quality.rttMs ? `${quality.rttMs} ms` : "—";
-  ui.lossValue.textContent = quality.packetLoss === null ? "Unknown" : `${quality.packetLoss}%`;
+  ui.lossValue.textContent = `${quality.packetLoss}%`;
   ui.resolutionValue.textContent = quality.width
-    ? `${quality.width}×${quality.height} · ${quality.fps ?? "?"} fps${quality.codec ? ` · ${quality.codec}` : ""}`
+    ? `${quality.width}×${quality.height} · ${quality.fps} fps${quality.codec ? ` · ${quality.codec}` : ""}`
     : "—";
-  ui.frameDropsValue.textContent = Number.isFinite(quality.framesDropped) ? `${quality.framesDropped} / ${quality.sampleSeconds || 5}s` : "Unknown";
+  ui.frameDropsValue.textContent = Number.isFinite(quality.framesDropped) ? `${quality.framesDropped} / 5s` : "—";
   ui.sourceValue.textContent = quality.sourceWidth
-    ? `${quality.sourceWidth}×${quality.sourceHeight} · actual ${quality.measuredSourceFps ?? "?"} fps (setting ${quality.sourceFps || "?"})`
+    ? `${quality.sourceWidth}x${quality.sourceHeight}${quality.sourceFps ? ` · ${quality.sourceFps} fps` : ""}`
     : "-";
-  ui.encodeTimeValue.textContent = quality.encodeTimeMs === null ? "Unknown" : `${quality.encodeTimeMs} ms/frame`;
-  ui.decodeTimeValue.textContent = quality.decodeTimeMs === null ? "Unknown" : `${quality.decodeTimeMs} ms/frame`;
-  ui.jitterBufferValue.textContent = quality.jitterBufferMs === null ? "Unknown" : `${quality.jitterBufferMs} ms`;
-  ui.freezeValue.textContent = quality.freezeDelta === null ? "Unknown" : `${quality.freezeDelta} / ${quality.sampleSeconds || 5}s`;
-  ui.senderCountValue.textContent = state.role === "host"
-    ? `${quality.senderCount} connections · SFU ${state.sfuStandby ? "paused" : "publishing"}`
-    : `P2P ${state.directPc ? "connected / probing" : "off"} · SFU ${state.pc ? "receiving" : "off"}`;
   ui.availableBitrateValue.textContent = quality.availableBitrateKbps
     ? `${quality.availableBitrateKbps} kbps`
     : "-";
   ui.limitationValue.textContent = quality.qualityLimitationReason && quality.qualityLimitationReason !== "none"
     ? quality.qualityLimitationReason === "receiver" ? "Receiver" : quality.qualityLimitationReason
     : "None";
-  if (quality.qualityLimitationReason === "unknown") ui.limitationValue.textContent = "Unknown";
 }
 
 async function toggleRoomLock() {
@@ -2972,48 +2722,7 @@ function leaveRoom() {
   location.href = state.role === "host" ? "/host" : "/";
 }
 
-async function changeRouteMode() {
-  if (state.role !== "viewer" || state.policyChanging) return;
-  state.policyChanging = true;
-  ui.routeMode.disabled = true;
-  clearBackupRelease();
-  try {
-    if (ui.routeMode.value === "sfu") {
-      cancelScheduledDirectProbe();
-      const restored = await subscribeToBroadcast(!state.sfuReady);
-      if (!restored || !await switchViewerRoute("sfu", "SFU-only diagnostic mode · automatic P2P probes disabled")) {
-        ui.routeMode.value = "auto";
-        toast("SFU is not ready; existing route kept");
-        scheduleBackupRelease();
-        return;
-      }
-      const host = state.participants.find((p) => p.role === "host");
-      if (host) sendSocket({ type: "p2p:signal", to: host.id, signal: { kind: "defer", retryAfterMs: DIRECT_FAILURE_COOLDOWN_MS } });
-      closePendingDirect();
-      closeViewerDirect(false);
-    } else {
-      state.directCooldownUntil = 0;
-      state.directProbeFailures = 0;
-      scheduleViewerDirectProbe(1_000, "viewer selected automatic routing", true);
-    }
-    diagnosticEvent("route-mode", { mode: ui.routeMode.value });
-    collectStats();
-  } finally {
-    state.policyChanging = false;
-    ui.routeMode.disabled = false;
-  }
-}
-
 function bindEvents() {
-  ui.exportDiagnostics.addEventListener("click", exportDiagnostics);
-  ui.routeMode.addEventListener("change", changeRouteMode);
-  ui.backupMode.addEventListener("change", async () => {
-    localStorage.setItem("cinema.backupMode", ui.backupMode.value);
-    diagnosticEvent("backup-mode", { mode: ui.backupMode.value });
-    if (usesOnDemandBackup()) scheduleBackupRelease();
-    else if (state.media && state.role === "viewer") { clearBackupRelease(); await subscribeToBroadcast(); }
-    collectStats();
-  });
   ui.ownerLoginForm.addEventListener("submit", ownerLogin);
   ui.createRoomForm.addEventListener("submit", createRoom);
   ui.logoutButton.addEventListener("click", ownerLogout);
@@ -3056,7 +2765,6 @@ function bindEvents() {
   ui.qualitySelect.addEventListener("change", () => {
     localStorage.setItem("cinema.quality", ui.qualitySelect.value);
     if (state.role === "viewer" && state.directPc?.connectionState === "connected") {
-      if (usesOnDemandBackup() && !state.pc) { toast("P2P quality is set by the host; SFU preference saved"); return; }
       toast("Direct quality is unchanged; refreshing the SFU backup");
       subscribeToBroadcast(true);
     } else if (state.role === "viewer" && state.media) subscribeToBroadcast(true);
@@ -3074,8 +2782,6 @@ function bindEvents() {
     // baseline so the first foreground sample is not presented as a five-second
     // loss/bitrate window.
     state.previousRtp.clear();
-    state.sourceSample = null;
-    state.healthSample = null;
     state.mediaProgress = new WeakMap();
     if (state.pc) collectStats();
     if (state.role === "viewer") checkViewerPlaybackHealth();

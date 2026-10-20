@@ -573,7 +573,7 @@ export class CinemaRoom {
       if (!this.consumeSocketRate(socket, meta, "p2p", 80, 10_000)) return;
       const targetId = safeText(data.to, 80);
       const signal = data.signal && typeof data.signal === "object" ? data.signal : {};
-      const kind = ["offer", "answer", "candidate", "hangup", "retry", "defer", "backup-needed", "backup-ready"].includes(signal.kind) ? signal.kind : "";
+      const kind = ["offer", "answer", "candidate", "hangup", "retry", "defer"].includes(signal.kind) ? signal.kind : "";
       if (!targetId || !kind) return;
 
       let cleanSignal;
@@ -595,11 +595,6 @@ export class CinemaRoom {
             },
           };
         } else return;
-      } else if (kind === "backup-needed" || kind === "backup-ready") {
-        if (meta.role !== (kind === "backup-needed" ? "viewer" : "host") || signal.mediaVersion !== this.room.activeMedia?.version) return;
-        const requestId = safeText(signal.requestId, 80);
-        if (!/^[A-Za-z0-9-]{16,80}$/.test(requestId)) return;
-        cleanSignal = { kind, requestId, mediaVersion: this.room.activeMedia.version };
       } else if (kind === "defer") {
         cleanSignal = {
           kind,
@@ -637,34 +632,22 @@ export class CinemaRoom {
   sanitizeQuality(value) {
     const quality = value && typeof value === "object" ? value : {};
     const number = (item, max) => Math.max(0, Math.min(max, Number(item) || 0));
-    const optional = (item, max) => typeof item === "number" && Number.isFinite(item) ? number(item, max) : null;
     return {
       state: ["excellent", "good", "fair", "poor", "connecting", "offline"].includes(quality.state) ? quality.state : "connecting",
       route: ["turn", "p2p", "p2p-turn"].includes(quality.route) ? quality.route : "direct",
       transport: ["udp", "tcp", "tls", "unknown"].includes(quality.transport) ? quality.transport : "unknown",
       bitrateKbps: number(quality.bitrateKbps, 100_000),
-      packetLoss: optional(quality.packetLoss, 100),
+      packetLoss: number(quality.packetLoss, 100),
       rttMs: number(quality.rttMs, 60_000),
       jitterMs: number(quality.jitterMs, 60_000),
       width: number(quality.width, 16_384),
       height: number(quality.height, 16_384),
-      fps: optional(quality.fps, 240),
-      framesDropped: optional(quality.framesDropped, 1_000_000_000),
-      qualityLimitationReason: ["none", "cpu", "bandwidth", "other", "receiver", "unknown"].includes(quality.qualityLimitationReason)
+      fps: number(quality.fps, 240),
+      framesDropped: number(quality.framesDropped, 1_000_000_000),
+      qualityLimitationReason: ["none", "cpu", "bandwidth", "other", "receiver"].includes(quality.qualityLimitationReason)
         ? quality.qualityLimitationReason
-        : "unknown",
+        : "none",
       codec: safeText(quality.codec, 16).toUpperCase(),
-      playbackRoute: ["direct", "sfu", "host"].includes(quality.playbackRoute) ? quality.playbackRoute : "none",
-      needsSfu: quality.needsSfu !== false,
-      routeMode: quality.routeMode === "sfu" ? "sfu" : "auto",
-      mediaVersion: safeText(quality.mediaVersion, 80),
-      reportedAt: Date.now(),
-      measuredSourceFps: optional(quality.measuredSourceFps, 240),
-      encodeTimeMs: optional(quality.encodeTimeMs, 60_000),
-      decodeTimeMs: optional(quality.decodeTimeMs, 60_000),
-      jitterBufferMs: optional(quality.jitterBufferMs, 60_000),
-      freezeDelta: optional(quality.freezeDelta, 1_000_000),
-      sampleSeconds: optional(quality.sampleSeconds, 3600),
     };
   }
 
