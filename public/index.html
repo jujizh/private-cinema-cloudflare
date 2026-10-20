@@ -7,8 +7,8 @@
   <meta name="color-scheme" content="dark">
   <title>Jiahao Private Cinema</title>
   <meta name="description" content="An invitation-only private cinema for watching together across the world.">
-  <link rel="stylesheet" href="/styles.css?v=2.3.6">
-  <script type="module" src="/app.js?v=2.3.6"></script>
+  <link rel="stylesheet" href="/styles.css?v=2.3.7">
+  <script type="module" src="/app.js?v=2.3.7"></script>
 </head>
 <body>
   <div class="grain" aria-hidden="true"></div>
@@ -20,7 +20,7 @@
       <span class="brand-mark" aria-hidden="true"><span></span></span>
       <span>
         <strong>Jiahao Private Cinema</strong>
-        <small>One screen. Any distance.</small>
+        <small>One screen. Any distance. <span id="versionLabel">v2.3.7</span></small>
       </span>
     </a>
     <div class="connection-pill" id="connectionPill">
@@ -151,6 +151,14 @@
               <button id="pictureInPicture" class="icon-button" title="Picture in picture" aria-label="Picture in picture">▣</button>
               <button id="fullscreenButton" class="icon-button" title="Fullscreen" aria-label="Fullscreen">⛶</button>
             </div>
+            <div class="control-group viewer-only">
+              <label class="quality-control">Route / 路线
+                <select id="routeMode"><option value="auto">Auto · P2P preferred</option><option value="sfu">SFU only · diagnostic</option></select>
+              </label>
+              <label class="quality-control">Backup / 备用
+                <select id="backupMode"><option value="ondemand">On demand · lower load</option><option value="hot">Hot · faster fallback</option></select>
+              </label>
+            </div>
             <div class="control-group caption-controls">
               <label class="quality-control">Subtitles
                 <select id="captionSelect"><option value="off">Off</option></select>
@@ -190,7 +198,7 @@
 
           <section class="panel network-panel">
             <div class="section-title">
-              <span>Stream health</span>
+              <span>Stream health · v2.3.7</span>
               <span id="healthLabel" class="health-chip connecting">Connecting</span>
             </div>
             <div class="network-grid">
@@ -204,6 +212,11 @@
               <div><small>Available bandwidth</small><strong id="availableBitrateValue">-</strong></div>
               <div><small>Frame drops</small><strong id="frameDropsValue">—</strong></div>
               <div><small>Limiter</small><strong id="limitationValue">—</strong></div>
+              <div><small>Encode time</small><strong id="encodeTimeValue">Unknown</strong></div>
+              <div><small>Decode time</small><strong id="decodeTimeValue">Unknown</strong></div>
+              <div><small>Jitter buffer</small><strong id="jitterBufferValue">Unknown</strong></div>
+              <div><small>New freezes</small><strong id="freezeValue">Unknown</strong></div>
+              <div class="network-wide"><small>Active media workload</small><strong id="senderCountValue">—</strong></div>
               <div class="network-wide"><small>Route state</small><strong id="routeStatusValue">Preparing backup route</strong></div>
               <div><small>Route switches</small><strong id="routeSwitchesValue">0</strong></div>
             </div>
@@ -211,6 +224,8 @@
               <summary>Everyone's connection</summary>
               <div id="diagnosticList" class="diagnostic-list"></div>
             </details>
+            <button id="exportDiagnostics" class="button button-soft button-wide">Export diagnostics / 导出诊断</button>
+            <p class="compact muted">On-demand backup saves duplicate traffic after P2P is playing. Fallback may take several seconds. 按需备用减少重复传输，切换可能需要数秒。导出最近约20分钟指标，不包含电影、聊天或邀请密钥。</p>
           </section>
 
           <section class="panel chat-panel">

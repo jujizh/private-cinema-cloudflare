@@ -1,8 +1,21 @@
-# Jiahao Private Cinema v2
+# Jiahao Private Cinema v2.3.7
+
+## v2.3.7：按需备用与可验证诊断
+
+- 观看端默认 `Backup → On demand`：P2P 已切为可见画面并稳定保留8秒后关闭后台 SFU 接收。可选 `Hot` 保持原有热备行为。
+- 所有观众都上报本次广播正在通过 P2P 播放、不需要 SFU，且上报未过期时，Host 才暂停 SFU 编码发送。仅仅连接成功不会触发暂停。
+- 备用恢复先发送唤醒请求，Host 恢复发送后确认，再准备 SFU；切换仍先等替代画面，后退役旧连接。按需模式有恢复等待，不承诺无缝、零黑屏或零丢包。
+- 观看端 `Route → SFU only` 可隔离测试 SFU，不会继续后台 P2P 探测；`Auto` 恢复 P2P 优先。
+- 新增实际采集统计（浏览器提供时）、每帧编解码耗时、抖动缓冲、新增冻结、活动连接负载。缺失数据显示 Unknown，不把设置30fps当作实际30fps。
+- 评级连续两个采样才改变；原始数值和恢复判断不做这种平滑。
+- `Export diagnostics / 导出诊断` 导出本页最近最多240次采样及200条路由事件；不上传，不含电影、聊天、姓名、邀请密钥、SDP或ICE地址。浏览器版本和媒体指标仍属于设备诊断信息，请审阅后再分享。
+- 修复 ICE 请求等待期间重复创建连接、未出画候选未退出、SFU 预热播放器未清理；每路发送用独立轨道克隆并在退役时释放。克隆仍共享底层采集源，不宣称完全隔离浏览器自适应。
+
+更新时必须同时部署 `public/` 和 `src/`；双方刷新并确认左上角 `v2.3.7`。无需新建房间、修改密钥或数据库迁移。此更新不修复 Windows / 显卡驱动层卡死。
 
 An invitation-only watch-together cinema designed for long-term deployment on Cloudflare.
 
-The owner creates a private screening at `/host`, sends signed invitations, and shares a browser tab or screen. Small rooms prefer direct WebRTC while a parallel Cloudflare Realtime SFU path stays decoded and ready for make-before-break fallback. Movie files are not uploaded to the Worker or Durable Objects.
+The owner creates a private screening at `/host`, sends signed invitations, and shares a browser tab or screen. Small rooms prefer direct WebRTC, with an on-demand SFU backup by default or an optional continuously receiving hot backup. Movie files are not uploaded to the Worker or Durable Objects.
 
 ## What changed in v2
 
