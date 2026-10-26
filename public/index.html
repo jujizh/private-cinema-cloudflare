@@ -7,8 +7,9 @@
   <meta name="color-scheme" content="dark">
   <title>Jiahao Private Cinema</title>
   <meta name="description" content="An invitation-only private cinema for watching together across the world.">
-  <link rel="stylesheet" href="/styles.css?v=2.3.6">
-  <script type="module" src="/app.js?v=2.3.6"></script>
+  <meta name="cinema-release" content="2.3.7-join-fix-20261026">
+  <link rel="stylesheet" href="/styles.css?v=2.3.7-join-fix-20261026">
+  <script type="module" src="/app.js?v=2.3.7-join-fix-20261026"></script>
 </head>
 <body>
   <div class="grain" aria-hidden="true"></div>
@@ -49,6 +50,13 @@
         <input id="guestName" maxlength="40" autocomplete="nickname" placeholder="e.g. Sana">
         <button id="enterRoomButton" class="button button-primary button-wide">Enter the cinema <span>→</span></button>
         <p id="inviteError" class="form-error" role="alert"></p>
+        <p id="joinStatus" class="muted compact" role="status" aria-live="polite"></p>
+        <details class="connection-help">
+          <summary>Connection help / 连接诊断 · v2.3.7</summary>
+          <p class="muted compact">If joining fails, copy this report to your host. No invitation links, tickets, names or chat are included.</p>
+          <pre id="joinDiagnosticText">2.3.7-join-fix-20261026 · Ready to join</pre>
+          <button type="button" class="button button-soft button-wide" data-copy-connection>Copy connection diagnostics / 复制连接诊断</button>
+        </details>
       </section>
 
       <section id="ownerEntry" class="glass entry-card hidden" aria-labelledby="ownerHeading">
@@ -107,6 +115,7 @@
           <h1 id="cinemaTitle">Movie night</h1>
         </div>
         <div class="room-actions">
+          <button type="button" class="button button-ghost" data-copy-connection title="Control connection diagnostics only; excludes invitation links">Connection report / 连接诊断</button>
           <button id="copyGuestLink" class="button button-soft host-only">Copy guest link</button>
           <button id="lockRoom" class="button button-soft host-only">Lock room</button>
           <button id="leaveRoom" class="button button-ghost">Leave</button>
@@ -252,6 +261,6 @@
   </main>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <div id="busyOverlay" class="busy-overlay hidden" aria-hidden="true"><span></span><p>Connecting to the cinema…</p></div>
+  <div id="busyOverlay" class="busy-overlay hidden" aria-hidden="true"><span></span><p>Connecting to the cinema…</p><button id="cancelJoin" type="button" class="button button-ghost hidden">Cancel joining / 取消加入</button></div>
 </body>
 </html>

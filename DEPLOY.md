@@ -1,4 +1,11 @@
-# Deploying v2 on Cloudflare
+# Deploying v2.3.7 Room Join Fix on Cloudflare
+
+Read [UPGRADE-2.3.7.md](UPGRADE-2.3.7.md) first. Deploy the complete package,
+including `public/room-connection.js` and the replacement
+`test/media-health.test.js`. Do not upload the older v2.3.7 package.
+
+Verify `/api/config` reports `version: "2.3.7"` and
+`release: "2.3.7-join-fix-20261026"`; a version number alone is not sufficient.
 
 This guide upgrades the existing `jiahao-private-cinema` Worker without changing its Worker name or custom domain.
 

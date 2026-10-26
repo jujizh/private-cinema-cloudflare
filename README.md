@@ -1,4 +1,22 @@
-# Jiahao Private Cinema v2
+# Jiahao Private Cinema v2.3.7 — Room Join Fix
+
+Release ID: `2.3.7-join-fix-20261026`.
+
+**This is a new v2.3.7 built from v2.3.6, NOT the retired on-demand-SFU v2.3.7.**
+See [UPGRADE-2.3.7.md](UPGRADE-2.3.7.md) before uploading. Media encoding, P2P
+probes, the hot SFU backup, subtitles, server room state and permissions retain
+the v2.3.6 implementation. Only the room-control join lifecycle is changed.
+
+- Single-flight admission, aborted ticket timeouts, fresh tickets on each retry.
+- At most three automatic attempts per join, with visible progress and Cancel.
+- 20-second handshake timeout and a separate 8-second room-welcome timeout.
+- Failed sockets are retired before retry; late messages cannot change state.
+- Early close/error fails immediately; permission failures do not retry blindly.
+- Reconnecting signalling does not stop an existing media track or broadcast.
+- A privacy-limited connection report is available both before and after joining.
+- Cannot bypass an operator/proxy/firewall which permanently blocks WebSockets.
+
+## Original product overview
 
 An invitation-only watch-together cinema designed for long-term deployment on Cloudflare.
 

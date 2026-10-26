@@ -1,5 +1,20 @@
 # Release checklist
 
+## v2.3.7 join-fix regression scope
+
+`npm run check` covers 49 checks (architecture/source assertions, connection
+controller runtime tests, app integration with a simulated DOM, server reconnect
+grace, and security). These checks do not prove China–Russia reachability.
+
+After deployment, verify the release ID in `/api/config`, then test initial join,
+Cancel, manual retry after failure, and a temporary network loss/recovery with
+both endpoints. A successful initial join must include the server's `welcome`,
+not just a WebSocket `open`. Ask for the built-in connection report if it fails.
+An HTTP 403 shown in the report is an admission response, not proof of a WAF rule;
+the browser generally hides the HTTP status of a rejected WebSocket upgrade.
+
+## Original baseline checklist
+
 ## Automated
 
 Run:

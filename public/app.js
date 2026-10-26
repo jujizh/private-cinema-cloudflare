@@ -1,3 +1,5 @@
+import { RoomConnection, JOIN_RELEASE } from "./room-connection.js?v=2.3.7-join-fix-20261026";
+
 const $ = (id) => document.getElementById(id);
 // Small private rooms prefer direct media because it has performed better than
 // the current SFU route in real-world testing. The Host sends one encoded copy
@@ -31,6 +33,7 @@ const ui = Object.fromEntries([
   "inviteLabel", "inviteRole", "inviteHours", "createInvite", "inviteResult", "newInviteLink", "copyNewInvite",
   "inviteList", "endRoom", "toast", "busyOverlay", "captionOverlay", "captionSelect", "captionFile",
   "loadCaptions", "deleteCaption", "captionSize", "captionClockToggle", "captionBack", "captionForward", "captionOffset", "sourceThrottleWarning",
+  "joinStatus", "joinDiagnosticText", "cancelJoin",
 ].map((id) => [id, $(id)]));
 
 const state = {
@@ -116,7 +119,61 @@ const state = {
   controlRestoreCount: 0,
   controlRestoreNotice: null,
   lastControlClose: null,
+  joinInProgress: false,
 };
+
+const roomConnection = new RoomConnection({
+  requestTicket: (signal) => api(`/api/rooms/${state.roomId}/ticket`, {
+    method: "POST", signal,
+    body: JSON.stringify({ name: state.name, clientId: state.clientId }),
+  }),
+  socketUrl: (ticket) => {
+    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${location.host}/ws?room=${encodeURIComponent(ticket.room.id)}&ticket=${encodeURIComponent(ticket.ticket)}`;
+  },
+  onSocket: (socket) => {
+    state.ws = socket;
+    if (!socket) { state.connected = false; stopHeartbeat(); }
+  },
+  onReady: (ticket) => {
+    state.room = ticket.room;
+    state.connected = true;
+    state.reconnectAttempt = 0;
+    startHeartbeat();
+    setConnection("Connected", "online");
+    if (!state.hasWelcomed) showCinema();
+  },
+  onMessage: (raw) => handleSocketMessage(raw),
+  onDisconnect: (event, socket) => handleSocketClose(event, socket),
+  onProgress: (progress) => updateJoinProgress(progress),
+});
+
+function updateJoinProgress({ phase, attempt, maxAttempts, code }) {
+  const phases = {
+    ticket: "Requesting admission / 正在申请入场",
+    handshake: "Connecting to the room / 正在建立房间连接",
+    welcome: "Waiting for room confirmation / 正在等待房间确认",
+    retry_wait: "Connection interrupted; retrying / 正在清理并重试",
+    ready: "Room connected / 房间已连接",
+    failed: "Unable to join; copy diagnostics below / 加入失败，可复制连接诊断",
+    cancelled: "Joining cancelled / 已取消加入",
+  };
+  if (phases[phase]) {
+    const text = `${phases[phase]} (${attempt}/${maxAttempts})${code ? ` [${code}]` : ""}`;
+    ui.joinStatus.textContent = text;
+    if (!state.hasWelcomed && state.joinInProgress) ui.busyOverlay.querySelector("p").textContent = text;
+  }
+  const last = roomConnection.diagnostics().events.slice(-12);
+  ui.joinDiagnosticText.textContent = `${JOIN_RELEASE}\n${last.map((event) =>
+    `${event.at} · ${event.phase} · attempt ${event.attempt}${event.code ? ` · ${event.code}` : ""}${event.status ? ` · HTTP ${event.status}` : ""}${event.closeCode ? ` · close ${event.closeCode}` : ""}`,
+  ).join("\n")}`;
+}
+
+async function copyConnectionDiagnostics() {
+  const report = { ...roomConnection.diagnostics(), online: navigator.onLine,
+    visibility: document.visibilityState };
+  await copyText(JSON.stringify(report, null, 2), "Connection diagnostics copied / 已复制连接诊断");
+}
 
 function getClientId() {
   // A participant identity must survive refreshes and network hand-offs, but it
@@ -675,6 +732,10 @@ async function copyText(text, success = "Copied") {
 }
 
 function showClosed(message) {
+  state.intentionalClose = true;
+  clearTimeout(state.reconnectTimer);
+  stopHeartbeat();
+  roomConnection.cancel(4000, "Screening unavailable");
   cancelScheduledDirectProbe();
   if (state.directPc || state.pendingDirectPc || state.directPeers.size) closeAllDirectConnections(false);
   [ui.inviteEntry, ui.ownerEntry, ui.ownerDashboard].forEach((element) => setVisible(element, false));
@@ -843,6 +904,7 @@ async function resumeRoom(roomId) {
 }
 
 async function enterInvitedRoom() {
+  if (state.joinInProgress) return;
   const name = ui.guestName.value.trim();
   if (!name) {
     ui.inviteError.textContent = "Please enter your name.";
@@ -867,42 +929,17 @@ async function enterInvitedRoom() {
 
 async function connectToRoom(isReconnect = false) {
   state.intentionalClose = false;
-  const ticket = await api(`/api/rooms/${state.roomId}/ticket`, {
-    method: "POST",
-    body: JSON.stringify({ name: state.name, clientId: state.clientId }),
-  });
-  state.room = ticket.room;
-  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  const socket = new WebSocket(`${protocol}//${location.host}/ws?room=${encodeURIComponent(state.roomId)}&ticket=${encodeURIComponent(ticket.ticket)}`);
-  if (state.ws && state.ws.readyState < 2) state.ws.close(4000, "Reconnecting");
-  state.ws = socket;
-
-  await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("The room took too long to respond")), 12_000);
-    const cleanup = () => {
-      clearTimeout(timeout);
-      socket.removeEventListener("open", opened);
-      socket.removeEventListener("error", failed);
-    };
-    const opened = () => {
-      cleanup();
-      resolve();
-    };
-    const failed = () => {
-      cleanup();
-      reject(new Error("Could not connect to the room"));
-    };
-    socket.addEventListener("message", (event) => handleSocketMessage(event.data));
-    socket.addEventListener("close", (event) => handleSocketClose(event, socket));
-    socket.addEventListener("open", opened, { once: true });
-    socket.addEventListener("error", failed, { once: true });
-  });
-
-  state.connected = true;
-  state.reconnectAttempt = 0;
-  startHeartbeat();
-  setConnection("Connected", "online");
-  if (!isReconnect) showCinema();
+  clearTimeout(state.reconnectTimer);
+  state.joinInProgress = true;
+  ui.enterRoomButton.disabled = true;
+  setVisible(ui.cancelJoin, !state.hasWelcomed);
+  try {
+    return await roomConnection.connect();
+  } finally {
+    state.joinInProgress = false;
+    ui.enterRoomButton.disabled = false;
+    setVisible(ui.cancelJoin, false);
+  }
 }
 
 function handleSocketClose(event, socket) {
@@ -944,18 +981,20 @@ function stopHeartbeat() {
   state.heartbeatTimer = null;
 }
 
-function scheduleReconnect() {
+function scheduleReconnect(immediate = false) {
+  if (state.intentionalClose || state.connected || state.joinInProgress) return;
   clearTimeout(state.reconnectTimer);
   state.reconnectAttempt += 1;
-  const delay = Math.min(15_000, 800 * 2 ** Math.min(5, state.reconnectAttempt));
+  const delay = immediate ? 0 : Math.min(15_000, 800 * 2 ** Math.min(5, state.reconnectAttempt));
   setConnection(`Reconnecting in ${Math.ceil(delay / 1000)}s`, "warn");
   state.reconnectTimer = setTimeout(async () => {
+    if (state.intentionalClose || state.connected || state.joinInProgress) return;
     try {
       await connectToRoom(true);
       noteControlRestored();
     } catch (error) {
       if (["room_ended", "room_expired", "invite_invalid", "room_locked", "client_banned"].includes(error.code)) showClosed(error.message);
-      else scheduleReconnect();
+      else if (error.code !== "join_cancelled") scheduleReconnect();
     }
   }, delay);
 }
@@ -2714,7 +2753,7 @@ function leaveRoom() {
   state.intentionalClose = true;
   clearTimeout(state.reconnectTimer);
   closeAllDirectConnections(false);
-  if (state.ws) state.ws.close(1000, "Left room");
+  roomConnection.cancel(1000, "Left room");
   if (state.localStream) state.localStream.getTracks().forEach((track) => track.stop());
   closePeerConnection();
   sessionStorage.removeItem("cinema.invite");
@@ -2723,6 +2762,14 @@ function leaveRoom() {
 }
 
 function bindEvents() {
+  document.querySelectorAll("[data-copy-connection]").forEach((button) =>
+    button.addEventListener("click", copyConnectionDiagnostics));
+  ui.cancelJoin.addEventListener("click", () => {
+    state.intentionalClose = true;
+    clearTimeout(state.reconnectTimer);
+    roomConnection.cancel();
+    setBusy(false);
+  });
   ui.ownerLoginForm.addEventListener("submit", ownerLogin);
   ui.createRoomForm.addEventListener("submit", createRoom);
   ui.logoutButton.addEventListener("click", ownerLogout);
@@ -2788,6 +2835,7 @@ function bindEvents() {
     if (state.localStream && !state.wakeLock) requestWakeLock();
   });
   window.addEventListener("online", () => {
+    if (!state.connected && state.hasWelcomed && !state.intentionalClose) scheduleReconnect(true);
     if (state.role === "host") reconcileDirectRoute();
     else if (state.directPc && state.directPc.connectionState !== "connected" && state.directCooldownUntil <= Date.now()) {
       const host = state.participants.find((participant) => participant.role === "host");

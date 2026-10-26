@@ -1,3 +1,8 @@
+.connection-help{margin-top:12px;border-top:1px solid #303039;padding-top:10px;font-size:12px}
+.connection-help summary{cursor:pointer;color:#bba1ed}
+.connection-help pre{max-height:180px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:10px;color:#a9a8b3}
+#joinStatus{overflow-wrap:anywhere;line-height:1.5}
+.busy-overlay p{max-width:min(90vw,620px);text-align:center;line-height:1.6}
 :root{
   --bg:#07080b;--panel:rgba(18,19,24,.78);--panel-solid:#111218;--line:rgba(255,255,255,.09);
   --text:#f7f4ee;--muted:#9b9aa4;--gold:#f0c782;--rose:#e64d78;--violet:#8b5cf6;
