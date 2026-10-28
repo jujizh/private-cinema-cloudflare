@@ -1,4 +1,5 @@
-import { RoomConnection, JOIN_RELEASE } from "./room-connection.js?v=2.3.7-join-fix-20261026";
+import { RoomConnection, JOIN_RELEASE } from "./room-connection.js?v=2.3.8-local-player-20261028";
+import { normaliseLocalState, localMovieClock, localCaptureDecision, formatMovieTime } from "./local-media.js?v=2.3.8-local-player-20261028";
 
 const $ = (id) => document.getElementById(id);
 // Small private rooms prefer direct media because it has performed better than
@@ -27,13 +28,14 @@ const ui = Object.fromEntries([
   "ownerError", "createRoomForm", "roomTitle", "roomHours", "dashboardError", "logoutButton", "recentRooms",
   "refreshRooms", "cinemaView", "cinemaTitle", "copyGuestLink", "lockRoom", "leaveRoom", "stage", "remoteVideo",
   "directVideo", "previewVideo", "stageEmpty", "stageKicker", "stageTitle", "stageHint", "liveBadge", "reactionLayer", "startShare",
-  "stopShare", "openMovie", "movieFile", "qualitySelect", "pictureInPicture", "fullscreenButton", "shareTip",
+  "stopShare", "openMovie", "qualitySelect", "pictureInPicture", "fullscreenButton", "shareTip",
   "peopleCount", "participants", "healthLabel", "routeValue", "transportValue", "bitrateValue", "latencyValue",
   "lossValue", "resolutionValue", "sourceValue", "availableBitrateValue", "frameDropsValue", "limitationValue", "routeStatusValue", "routeSwitchesValue", "hostDiagnostics", "diagnosticList", "chatLog", "chatForm", "chatInput",
   "inviteLabel", "inviteRole", "inviteHours", "createInvite", "inviteResult", "newInviteLink", "copyNewInvite",
   "inviteList", "endRoom", "toast", "busyOverlay", "captionOverlay", "captionSelect", "captionFile",
   "loadCaptions", "deleteCaption", "captionSize", "captionClockToggle", "captionBack", "captionForward", "captionOffset", "sourceThrottleWarning",
   "joinStatus", "joinDiagnosticText", "cancelJoin",
+  "localPlayback", "localPlayerStatus", "localPlayPause", "localSeekBack", "localSeekForward", "localSeek", "localTime", "localShare",
 ].map((id) => [id, $(id)]));
 
 const state = {
@@ -97,6 +99,11 @@ const state = {
   captionClockLastSentAt: 0,
   playerChannel: null,
   playerChannelId: "",
+  playerState: null,
+  localCaptureChannelId: "",
+  localCaptureVerified: false,
+  localSeeking: false,
+  localPlayerTimer: null,
   sourceThrottleSamples: 0,
   sourceHealthySamples: 0,
   sourceThrottleWarnedAt: 0,
@@ -1814,13 +1821,20 @@ async function createMediaSession(activate = true) {
   return result.sessionId;
 }
 
-async function startBroadcast() {
+async function startBroadcast(options = {}) {
   if (!state.connected || state.role !== "host" || state.localStream) return;
+  const preferLocal = options.localPlayer === true;
+  if (preferLocal && (!state.playerState?.ready || performance.now() - state.playerState.receivedAt > 10_000)) {
+    toast("Choose a playable movie in the local player first / 请先在本地播放器选择可播放的电影");
+    return;
+  }
   ui.startShare.disabled = true;
+  ui.localShare.disabled = true;
   try {
     const profile = qualityProfile();
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: {
+        ...(preferLocal ? { displaySurface: "browser" } : {}),
         width: { ideal: profile.width, max: profile.width },
         height: { ideal: profile.height, max: profile.height },
         frameRate: { ideal: 30, max: 30 },
@@ -1829,6 +1843,25 @@ async function startBroadcast() {
     });
     state.localStream = stream;
     const videoTrack = stream.getVideoTracks()[0];
+    let captureHandle = null;
+    try { captureHandle = videoTrack?.getCaptureHandle?.(); } catch {}
+    const decision = localCaptureDecision(videoTrack?.getSettings?.(), captureHandle, state.playerChannelId, location.origin, preferLocal);
+    if (decision.error) throw new Error(decision.error);
+    state.localCaptureChannelId = decision.local ? state.playerChannelId : "";
+    state.localCaptureVerified = Boolean(decision.verified);
+    if (decision.local) state.playerChannel?.postMessage({ type: "sharing", active: true });
+    videoTrack?.addEventListener("capturehandlechange", () => {
+      if (state.localStream !== stream || !state.localCaptureChannelId) return;
+      let nextHandle = null;
+      try { nextHandle = videoTrack.getCaptureHandle?.(); } catch {}
+      const next = localCaptureDecision(videoTrack.getSettings?.(), nextHandle, state.playerChannelId, location.origin);
+      if (!next.local) {
+        state.localCaptureChannelId = "";
+        state.playerChannel?.postMessage({ type: "sharing", active: false });
+        publishCaptionClock(currentCaptionTime(), false, "manual", true, 1);
+        toast("Shared tab changed; subtitle timing is now manual / 共享标签页已改变，字幕切为手动同步");
+      }
+    });
     if (videoTrack) videoTrack.contentHint = "motion";
     stream.getTracks().forEach((track) => track.addEventListener("ended", () => {
       if (state.localStream) stopBroadcast(true);
@@ -1838,7 +1871,10 @@ async function startBroadcast() {
     setVisible(ui.liveBadge, true);
     setVisible(ui.startShare, false);
     setVisible(ui.stopShare, true);
-    publishCaptionClock(0, true, "capture", true);
+    if (state.localCaptureChannelId) {
+      const clock = localMovieClock(state.playerState);
+      publishCaptionClock(clock.time, clock.playing, "local-player", true, clock.rate);
+    } else publishCaptionClock(0, true, "capture", true, 1);
     const iceServers = await getIceServers();
     const sessionId = await createMediaSession();
     const pc = new RTCPeerConnection({ iceServers, bundlePolicy: "max-bundle" });
@@ -1881,6 +1917,7 @@ async function startBroadcast() {
     await stopBroadcast(false);
   } finally {
     ui.startShare.disabled = false;
+    updateLocalPlaybackControls();
   }
 }
 
@@ -2029,6 +2066,9 @@ function waitForConnected(pc, timeoutMs = 15_000) {
 }
 
 async function stopBroadcast(notifyServer = true) {
+  state.playerChannel?.postMessage({ type: "sharing", active: false });
+  state.localCaptureChannelId = "";
+  state.localCaptureVerified = false;
   const hadStream = Boolean(state.localStream);
   if (hadStream && state.role === "host") publishCaptionClock(currentCaptionTime(), false, state.captionClock?.source || "capture", true);
   const sessionId = state.sessionId;
@@ -2120,41 +2160,90 @@ async function requestWakeLock() {
   try { state.wakeLock = await navigator.wakeLock?.request("screen"); } catch {}
 }
 
-function openLocalMovie() {
-  ui.movieFile.click();
-}
-
-function launchMovieFile() {
-  const file = ui.movieFile.files?.[0];
-  if (!file) return;
-  const isMatroska = /\.mkv$/i.test(file.name) || /matroska/i.test(file.type);
+function openLocalMovie(event) {
+  if (state.role !== "host" || !state.connected || state.localCaptureChannelId) {
+    event?.preventDefault();
+    toast(state.localCaptureChannelId ? "Stop sharing before opening another player / 请先停止共享，再打开另一个播放器" : "Join as host first / 请先以主持人身份进入房间");
+    return;
+  }
+  if (typeof BroadcastChannel === "undefined") {
+    ui.openMovie.href = "/player.html";
+    toast("This browser needs manual subtitle timing / 此浏览器需要手动同步字幕");
+    return;
+  }
+  state.playerChannel?.postMessage({ type: "room-detached" });
   state.playerChannel?.close();
   const channelId = crypto.randomUUID();
   const channel = new BroadcastChannel(`cinema-player-${channelId}`);
   state.playerChannel = channel;
   state.playerChannelId = channelId;
+  state.playerState = null;
+  // A native anchor opens during this exact click. Choose the file INSIDE the
+  // player; never call window.open after the file picker has consumed activation.
+  ui.openMovie.href = `/player.html?channel=${encodeURIComponent(channelId)}`;
+  setVisible(ui.localPlayback, true);
+  updateLocalPlaybackControls();
+  clearInterval(state.localPlayerTimer);
+  state.localPlayerTimer = setInterval(updateLocalPlaybackControls, 1_000);
   channel.addEventListener("message", ({ data }) => {
     if (!data || state.playerChannel !== channel) return;
     if (data.type === "ready") {
-      channel.postMessage({ type: "load", file, name: file.name });
+      channel.postMessage({ type: "room-ready" });
       return;
     }
-    if (data.type === "clock") {
-      const force = ["play", "pause", "seeked", "loadedmetadata", "ended"].includes(data.reason);
-      publishCaptionClock(Number(data.time) || 0, !data.paused, "local-player", force);
+    const next = normaliseLocalState(data);
+    if (!next) return;
+    state.playerState = next;
+    updateLocalPlaybackControls();
+    if (state.localStream && state.localCaptureChannelId === channelId) {
+      const clock = localMovieClock(next);
+      const force = ["play", "pause", "seeked", "loadedmetadata", "ended", "waiting", "stalled", "seeking", "closed", "load", "ratechange", "error", "playing"].includes(data.reason);
+      publishCaptionClock(clock.time, clock.playing, "local-player", force, clock.rate);
     }
   });
-  const player = window.open(`/player.html?channel=${encodeURIComponent(channelId)}`, "_blank");
-  if (!player) {
-    channel.close();
-    state.playerChannel = null;
-    toast("Allow pop-ups, then try again");
-  } else if (isMatroska) {
-    toast("MKV opened — automatic timing works if Chrome can decode it; otherwise share VLC/mpv and use the subtitle pause button");
-  } else {
-    toast("Movie opened — pause and seeking will sync room subtitles automatically");
+}
+
+function updateLocalPlaybackControls() {
+  if (!ui.localPlayerStatus || state.role !== "host") return;
+  const player = state.playerState;
+  const fresh = player && performance.now() - player.receivedAt <= 10_000;
+  const usable = Boolean(fresh && player.ready);
+  const labels = {
+    empty: "Choose a movie in the player / 请在播放器选择电影",
+    loading: "Reading local file / 正在读取本地电影",
+    error: "Unsupported file; see the player for details / 文件不兼容，请查看播放器提示",
+    closed: "Player closed / 播放器已关闭",
+  };
+  const shared = state.localCaptureChannelId ? (state.localCaptureVerified ? "Sharing local player / 已识别本地播放器" : "Sharing selected local tab / 按所选本地标签页同步") : "Not sharing yet / 尚未共享";
+  ui.localPlayerStatus.textContent = !player ? "Waiting for player tab / 等待播放器标签页"
+    : !fresh ? "Player is not responding / 播放器暂未响应"
+    : labels[player.status] || `${player.name} · ${shared}`;
+  ui.localPlayerStatus.title = ui.localPlayerStatus.textContent;
+  for (const button of [ui.localPlayPause, ui.localSeekBack, ui.localSeekForward]) button.disabled = !usable;
+  ui.localShare.disabled = !usable || Boolean(state.localStream) || !state.connected;
+  ui.localPlayPause.textContent = player?.paused ? "Play / 播放" : "Pause / 暂停";
+  const clock = localMovieClock(player);
+  ui.localSeek.disabled = !usable || !player.duration;
+  ui.localSeek.max = String(player?.duration || 0);
+  if (!state.localSeeking) ui.localSeek.value = String(clock.time);
+  ui.localTime.textContent = `${formatMovieTime(state.localSeeking ? ui.localSeek.value : clock.time)} / ${formatMovieTime(player?.duration)}`;
+  if (state.localCaptureChannelId && !fresh && state.captionClock?.playing) {
+    publishCaptionClock(clock.time, false, "local-player", true, clock.rate);
   }
-  ui.movieFile.value = "";
+}
+
+function commandLocalMovie(action, time) {
+  if (state.role !== "host" || !state.playerChannel || !state.playerState?.ready
+    || performance.now() - state.playerState.receivedAt > 10_000) return;
+  if (action === "seek" && !Number.isFinite(time)) return;
+  state.playerChannel.postMessage({ type: "command", action, ...(action === "seek" ? { time } : {}) });
+}
+
+function seekLocalMovieBy(seconds) {
+  if (state.playerState) {
+    const clock = localMovieClock(state.playerState);
+    commandLocalMovie("seek", Math.max(0, Math.min(state.playerState.duration, clock.time + seconds)));
+  }
 }
 
 function parseCaptionTime(value) {
@@ -2331,6 +2420,7 @@ function applyCaptionClock(clock) {
     time: Math.max(0, Number(clock.time)),
     playing: Boolean(clock.playing),
     source: ["capture", "local-player", "manual"].includes(clock.source) ? clock.source : "capture",
+    rate: Number.isFinite(Number(clock.rate)) && Number(clock.rate) > 0 ? Math.max(0.25, Math.min(4, Number(clock.rate))) : 1,
     anchoredAt: performance.now(),
   };
   updateCaptionClockButton();
@@ -2339,21 +2429,25 @@ function applyCaptionClock(clock) {
 
 function currentCaptionTime() {
   if (!state.captionClock) return Math.max(0, Number(activePlaybackVideo()?.currentTime || 0));
-  const elapsed = state.captionClock.playing ? (performance.now() - state.captionClock.anchoredAt) / 1000 : 0;
+  const elapsed = state.captionClock.playing ? (performance.now() - state.captionClock.anchoredAt) / 1000 * state.captionClock.rate : 0;
   return Math.max(0, state.captionClock.time + elapsed);
 }
 
-function publishCaptionClock(time, playing, source = "manual", force = false) {
+function publishCaptionClock(time, playing, source = "manual", force = false, rate = state.captionClock?.rate || 1) {
   if (state.role !== "host") return;
   const now = performance.now();
-  applyCaptionClock({ time, playing, source });
+  applyCaptionClock({ time, playing, source, rate });
   if (!force && now - state.captionClockLastSentAt < 900) return;
   state.captionClockLastSentAt = now;
-  sendSocket({ type: "caption:clock", clock: { time: Math.max(0, Number(time) || 0), playing: Boolean(playing), source } });
+  sendSocket({ type: "caption:clock", clock: { time: Math.max(0, Number(time) || 0), playing: Boolean(playing), source, rate } });
 }
 
 function toggleCaptionClock() {
   if (state.role !== "host") return;
+  if (state.localCaptureChannelId) {
+    commandLocalMovie("toggle");
+    return;
+  }
   const time = currentCaptionTime();
   const playing = state.captionClock ? !state.captionClock.playing : false;
   publishCaptionClock(time, playing, "manual", true);
@@ -2363,7 +2457,9 @@ function toggleCaptionClock() {
 function updateCaptionClockButton() {
   if (!ui.captionClockToggle) return;
   const playing = state.captionClock?.playing !== false;
-  ui.captionClockToggle.textContent = playing ? "Pause subtitles" : "Resume subtitles";
+  ui.captionClockToggle.textContent = state.localCaptureChannelId
+    ? playing ? "Pause movie + subtitles / 暂停电影及字幕" : "Play movie + subtitles / 播放电影及字幕"
+    : playing ? "Pause subtitles" : "Resume subtitles";
   ui.captionClockToggle.classList.toggle("button-danger", playing);
   ui.captionClockToggle.classList.toggle("button-soft", !playing);
 }
@@ -2407,7 +2503,7 @@ function startCaptionRenderer() {
   if (state.captionTimer) return;
   state.captionTimer = setInterval(() => {
     renderCaption();
-    if (state.role === "host" && state.captionClock?.playing && performance.now() - state.captionClockLastSentAt >= 4_000) {
+    if (state.role === "host" && !state.localCaptureChannelId && state.captionClock?.playing && performance.now() - state.captionClockLastSentAt >= 4_000) {
       publishCaptionClock(currentCaptionTime(), true, state.captionClock.source, true);
     }
   }, 150);
@@ -2752,6 +2848,9 @@ async function endScreening() {
 function leaveRoom() {
   state.intentionalClose = true;
   clearTimeout(state.reconnectTimer);
+  clearInterval(state.localPlayerTimer);
+  state.playerChannel?.postMessage({ type: "room-detached" });
+  state.playerChannel?.close();
   closeAllDirectConnections(false);
   roomConnection.cancel(1000, "Left room");
   if (state.localStream) state.localStream.getTracks().forEach((track) => track.stop());
@@ -2784,7 +2883,12 @@ function bindEvents() {
   ui.startShare.addEventListener("click", startBroadcast);
   ui.stopShare.addEventListener("click", () => stopBroadcast(true));
   ui.openMovie.addEventListener("click", openLocalMovie);
-  ui.movieFile.addEventListener("change", launchMovieFile);
+  ui.localShare.addEventListener("click", () => startBroadcast({ localPlayer: true }));
+  ui.localPlayPause.addEventListener("click", () => commandLocalMovie("toggle"));
+  ui.localSeekBack.addEventListener("click", () => seekLocalMovieBy(-10));
+  ui.localSeekForward.addEventListener("click", () => seekLocalMovieBy(10));
+  ui.localSeek.addEventListener("input", () => { state.localSeeking = true; updateLocalPlaybackControls(); });
+  ui.localSeek.addEventListener("change", () => { state.localSeeking = false; commandLocalMovie("seek", Number(ui.localSeek.value)); });
   ui.loadCaptions.addEventListener("click", () => ui.captionFile.click());
   ui.captionFile.addEventListener("change", loadCaptionFiles);
   ui.captionSelect.addEventListener("change", () => {

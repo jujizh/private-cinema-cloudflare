@@ -1,5 +1,5 @@
 // Control/signalling only. This controller never owns or closes media tracks.
-export const JOIN_RELEASE = "2.3.7-join-fix-20261026";
+export const JOIN_RELEASE = "2.3.8-local-player-20261028";
 
 const terminalCodes = new Set([
   "join_cancelled", "room_ended", "room_expired", "invite_invalid", "invite_required",

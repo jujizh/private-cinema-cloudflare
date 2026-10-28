@@ -3,17 +3,34 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Private Cinema Player</title>
-  <link rel="stylesheet" href="/player.css">
+  <meta name="color-scheme" content="dark">
+  <title>Local movie / 本地电影 — Private Cinema</title>
+  <link rel="stylesheet" href="/player.css?v=2.3.8-local-player-20261028">
 </head>
 <body>
+  <header>
+    <div><h1>Local movie <span>本地电影</span></h1><p id="roomConnection">Linking to your room / 正在连接房间</p></div>
+    <nav aria-label="Player actions">
+      <label class="choose" for="localFile">Choose movie / 选择电影<input id="localFile" type="file" accept="video/mp4,video/webm,video/x-matroska,video/matroska,.mp4,.webm,.mkv,.m4v" aria-label="Choose a local movie"></label>
+      <button id="pictureMode" type="button">Picture only / 画面模式</button>
+      <button id="fullscreen" type="button">Fullscreen / 全屏</button>
+    </nav>
+  </header>
   <main>
-    <video id="movie" controls autoplay playsinline></video>
-    <div id="empty">
-      <strong>Preparing your local movie…</strong>
-      <span>This tab reports play, pause and seeking to the room subtitle clock.</span>
-    </div>
+    <video id="movie" controls playsinline hidden></video>
+    <section id="empty">
+      <h2>A file on your computer.<br>A screen for your room.</h2>
+      <p>先在此页选择电影，再回房间点击“共享本地播放器”，选择这个 Chrome 标签页并勾选共享标签页音频。</p>
+      <p>The file stays on your computer. No movie upload. MP4 (H.264 + AAC) or compatible WebM recommended; MKV depends on its codecs.</p>
+      <p>字幕请在房间里上传和选择。这个播放器不显示房间字幕，确保每个人都能独立选语言。</p>
+    </section>
   </main>
-  <script type="module" src="/player.js"></script>
+  <footer>
+    <div class="file-meta"><strong id="fileLabel">No movie selected / 未选择电影</strong><span id="playerStatus" role="status" aria-live="polite">Only local playback; no cloud upload / 仅本地播放</span></div>
+    <p>Embedded text subtitles are disabled when the browser exposes them. Burned-in subtitles cannot be removed. 可关闭的内嵌文本字幕会隐藏；压入画面的硬字幕仍会保留。</p>
+    <p>画面模式下按 Esc 显示操作栏。Keep this player visible if capture FPS drops / 帧率下降时请把此页移到独立可见窗口。</p>
+    <p id="playerError" class="error" role="alert" hidden></p>
+  </footer>
+  <script type="module" src="/player.js?v=2.3.8-local-player-20261028"></script>
 </body>
 </html>

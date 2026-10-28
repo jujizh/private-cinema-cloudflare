@@ -1,13 +1,15 @@
-# Deploying v2.3.7 Room Join Fix on Cloudflare
+# Deploying v2.3.8 Local Player on Cloudflare
 
-Read [UPGRADE-2.3.7.md](UPGRADE-2.3.7.md) first. Deploy the complete package,
-including `public/room-connection.js` and the replacement
-`test/media-health.test.js`. Do not upload the older v2.3.7 package.
+Read [UPGRADE-2.3.8.md](UPGRADE-2.3.8.md) first. Deploy the complete package,
+including `public/local-media.js`, the player assets, and the included tests.
+Do not mix old and new files or upload node_modules/.wrangler/build-output.
 
-Verify `/api/config` reports `version: "2.3.7"` and
-`release: "2.3.7-join-fix-20261026"`; a version number alone is not sufficient.
+Verify `/api/config` reports `version: "2.3.8"` and
+`release: "2.3.8-local-player-20261028"`; a version number alone is not sufficient.
 
-This guide upgrades the existing `jiahao-private-cinema` Worker without changing its Worker name or custom domain.
+This package targets the existing `jujizh-jiahao-private-cinema-cloudflare`
+Worker and `cinema.mofangnet.eu.org` domain. Preserve the existing Durable
+Object migrations, bindings and secrets. Do not create a differently named Worker.
 
 ## 1. Create a Cloudflare Realtime SFU app
 
@@ -29,7 +31,7 @@ https://developers.cloudflare.com/realtime/turn/generate-credentials/
 
 Open:
 
-**Cloudflare Dashboard → Workers & Pages → jiahao-private-cinema → Settings → Variables and Secrets**
+**Cloudflare Dashboard → Workers & Pages → jujizh-jiahao-private-cinema-cloudflare → Settings → Variables and Secrets**
 
 Add every item below as **Secret**, not plain text:
 

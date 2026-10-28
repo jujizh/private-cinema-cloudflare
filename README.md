@@ -1,9 +1,24 @@
-# Jiahao Private Cinema v2.3.7 — Room Join Fix
+# Jiahao Private Cinema v2.3.8 — Local Player
 
-Release ID: `2.3.7-join-fix-20261026`.
+Release ID: `2.3.8-local-player-20261028`.
+
+See [UPGRADE-2.3.8.md](UPGRADE-2.3.8.md) for the new local-movie workflow and limitations.
+The player opens as a native link **before** selecting a file, eliminating the
+old delayed `window.open` flow. Pick a movie inside that tab, then return to the
+room and use **Share local player** → Chrome Tab → enable tab audio. Movie bytes
+stay local; the browser still encodes and transmits the shared tab through the
+existing P2P/SFU routes. This does not add server transcoding or change routing.
+
+Play, pause, seek, buffering and playback rate update the room subtitle clock.
+Every endpoint independently selects uploaded SRT/VTT subtitles. The source tab
+never draws room subtitles into the shared image. Browser-exposed embedded text
+tracks are disabled; universal MKV/ASS/PGS support and removal of burned-in text
+are **not** included. Prefer MP4 with H.264/AAC or a browser-compatible WebM.
+
+## Previous v2.3.7 join fix (retained)
 
 **This is a new v2.3.7 built from v2.3.6, NOT the retired on-demand-SFU v2.3.7.**
-See [UPGRADE-2.3.7.md](UPGRADE-2.3.7.md) before uploading. Media encoding, P2P
+Historical notes: [UPGRADE-2.3.7.md](UPGRADE-2.3.7.md). Media encoding, P2P
 probes, the hot SFU backup, subtitles, server room state and permissions retain
 the v2.3.6 implementation. Only the room-control join lifecycle is changed.
 

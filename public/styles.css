@@ -3,6 +3,16 @@
 .connection-help pre{max-height:180px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:10px;color:#a9a8b3}
 #joinStatus{overflow-wrap:anywhere;line-height:1.5}
 .busy-overlay p{max-width:min(90vw,620px);text-align:center;line-height:1.6}
+a.button{display:inline-flex;align-items:center;justify-content:center;text-decoration:none}
+.local-playback{padding:13px 15px;background:#111217;border-top:1px solid #303039}
+.local-playback>p{margin:0;font-size:12px;line-height:1.5;overflow-wrap:anywhere;color:#d7d2dc}
+.local-buttons{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0}
+.local-progress{display:flex;gap:12px;align-items:center;font-size:11px;color:#aaa7b3}
+.local-progress input{flex:1;min-width:60px;height:24px;padding:0;accent-color:#b890f8;border:0;box-shadow:none}
+.local-progress span:last-child{flex:none;font-variant-numeric:tabular-nums}
+.local-playback .local-help{margin-top:9px;color:#9b98a4;font-size:11px}
+@media(max-width:700px){.control-group.caption-controls{flex-wrap:wrap;overflow:visible;gap:9px}.caption-controls .quality-control select{max-width:44vw}}
+@media(max-width:450px){.local-buttons #localShare{flex-basis:100%}}
 :root{
   --bg:#07080b;--panel:rgba(18,19,24,.78);--panel-solid:#111218;--line:rgba(255,255,255,.09);
   --text:#f7f4ee;--muted:#9b9aa4;--gold:#f0c782;--rose:#e64d78;--violet:#8b5cf6;

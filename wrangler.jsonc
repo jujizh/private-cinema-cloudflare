@@ -1,6 +1,12 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "jiahao-private-cinema",
+  "name": "jujizh-jiahao-private-cinema-cloudflare",
+  "account_id": "6cb8f329c1bcbc5ea713c39a448e9db4",
+  "workers_dev": true,
+  "preview_urls": true,
+  "routes": [
+    { "pattern": "cinema.mofangnet.eu.org", "custom_domain": true }
+  ],
   "main": "src/index.js",
   "compatibility_date": "2026-09-08",
   "assets": {

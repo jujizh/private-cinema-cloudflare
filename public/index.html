@@ -7,9 +7,9 @@
   <meta name="color-scheme" content="dark">
   <title>Jiahao Private Cinema</title>
   <meta name="description" content="An invitation-only private cinema for watching together across the world.">
-  <meta name="cinema-release" content="2.3.7-join-fix-20261026">
-  <link rel="stylesheet" href="/styles.css?v=2.3.7-join-fix-20261026">
-  <script type="module" src="/app.js?v=2.3.7-join-fix-20261026"></script>
+  <meta name="cinema-release" content="2.3.8-local-player-20261028">
+  <link rel="stylesheet" href="/styles.css?v=2.3.8-local-player-20261028">
+  <script type="module" src="/app.js?v=2.3.8-local-player-20261028"></script>
 </head>
 <body>
   <div class="grain" aria-hidden="true"></div>
@@ -52,9 +52,9 @@
         <p id="inviteError" class="form-error" role="alert"></p>
         <p id="joinStatus" class="muted compact" role="status" aria-live="polite"></p>
         <details class="connection-help">
-          <summary>Connection help / 连接诊断 · v2.3.7</summary>
+          <summary>Connection help / 连接诊断 · v2.3.8</summary>
           <p class="muted compact">If joining fails, copy this report to your host. No invitation links, tickets, names or chat are included.</p>
-          <pre id="joinDiagnosticText">2.3.7-join-fix-20261026 · Ready to join</pre>
+          <pre id="joinDiagnosticText">2.3.8-local-player-20261028 · Ready to join</pre>
           <button type="button" class="button button-soft button-wide" data-copy-connection>Copy connection diagnostics / 复制连接诊断</button>
         </details>
       </section>
@@ -145,8 +145,7 @@
             <div class="control-group host-only">
               <button id="startShare" class="button button-primary">Start broadcasting</button>
               <button id="stopShare" class="button button-danger hidden">Stop</button>
-              <button id="openMovie" class="button button-soft">Open local video</button>
-              <input id="movieFile" class="visually-hidden" type="file" accept="video/mp4,video/webm,video/x-matroska,video/matroska,.mp4,.webm,.mkv">
+              <a id="openMovie" class="button button-soft" href="/player.html" target="_blank" rel="noopener">Open local video / 本地电影 ↗</a>
             </div>
             <div class="control-group">
               <label class="quality-control">Quality
@@ -180,8 +179,19 @@
               <button id="captionForward" class="icon-button" title="Subtitles 1 second later" aria-label="Subtitles 1 second later">+1s</button>
             </div>
           </div>
+          <div id="localPlayback" class="local-playback hidden">
+            <p id="localPlayerStatus" role="status" aria-live="polite">Waiting for local player / 等待本地播放器</p>
+            <div class="local-buttons">
+              <button id="localPlayPause" type="button" class="button button-soft" disabled>Play / 播放</button>
+              <button id="localSeekBack" type="button" class="button button-ghost" disabled aria-label="Rewind local movie 10 seconds">−10s</button>
+              <button id="localSeekForward" type="button" class="button button-ghost" disabled aria-label="Forward local movie 10 seconds">+10s</button>
+              <button id="localShare" type="button" class="button button-primary" disabled>Share local player / 共享本地播放器</button>
+            </div>
+            <label class="local-progress"><span class="visually-hidden">Local movie position / 本地电影进度</span><input id="localSeek" type="range" min="0" max="0" step="0.1" value="0" disabled><span id="localTime">0:00 / 0:00</span></label>
+            <p class="local-help">先在新标签页选择电影，再点“共享本地播放器”，在 Chrome 标签页中选择它并勾选音频。字幕在下方选择；暂停和拖动进度会同步房间字幕。</p>
+          </div>
           <div id="shareTip" class="share-tip host-only">For the clearest sound, play the video in Chrome or Edge, share that tab, and turn on <strong>Share tab audio</strong>.</div>
-          <div class="caption-tip host-only"><strong>Subtitle timing:</strong> videos opened with “Open local video” pause and seek automatically. For Tencent Video or another external tab, use “Pause subtitles” whenever you pause the film.</div>
+          <div class="caption-tip host-only"><strong>Room subtitles / 房间字幕：</strong>上传 SRT/VTT 后，每个人独立选择语言。本地播放器通过“共享本地播放器”连接时，字幕随电影暂停和跳转；外部网站仍需手动同步。播放器隐藏浏览器可识别的内嵌文本字幕，不会删除画面里的硬字幕。</div>
           <div id="sourceThrottleWarning" class="source-warning host-only" role="status">
             <strong>Capture stability tip (not a live warning).</strong>
             Move the movie tab into its own browser window and keep it active. 共享源可能被浏览器降速，请把电影标签页移到独立窗口并保持活动。

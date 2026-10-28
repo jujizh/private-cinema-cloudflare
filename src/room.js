@@ -226,10 +226,12 @@ export class CinemaRoom {
     const clock = this.room?.captionClock;
     if (!clock || !Number.isFinite(Number(clock.time))) return null;
     const now = Date.now();
-    const elapsed = clock.playing ? Math.max(0, now - Number(clock.updatedAt || now)) / 1000 : 0;
+    const rate = Number.isFinite(clock.rate) && clock.rate > 0 ? Math.max(0.25, Math.min(4, clock.rate)) : 1;
+    const elapsed = clock.playing ? Math.max(0, now - Number(clock.updatedAt || now)) / 1000 * rate : 0;
     return {
       time: Math.max(0, Number(clock.time) + elapsed),
       playing: Boolean(clock.playing),
+      rate,
       source: ["capture", "local-player", "manual"].includes(clock.source) ? clock.source : "capture",
     };
   }
@@ -561,7 +563,8 @@ export class CinemaRoom {
       const input = data.clock && typeof data.clock === "object" ? data.clock : {};
       const time = Math.max(0, Math.min(24 * 60 * 60, Number(input.time) || 0));
       const source = ["capture", "local-player", "manual"].includes(input.source) ? input.source : "capture";
-      this.room.captionClock = { time, playing: Boolean(input.playing), source, updatedAt: Date.now() };
+      const rate = Number.isFinite(input.rate) && input.rate > 0 ? Math.max(0.25, Math.min(4, input.rate)) : 1;
+      this.room.captionClock = { time, playing: Boolean(input.playing), source, rate, updatedAt: Date.now() };
       this.ctx.waitUntil(this.persist());
       this.broadcast({ type: "caption:clock", clock: this.captionClockState() });
       return;

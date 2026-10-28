@@ -6,6 +6,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { RoomConnection, JOIN_RELEASE } from "../public/room-connection.js";
+import * as localMedia from "../public/local-media.js";
 
 class Socket extends EventTarget {
   constructor() { super(); this.readyState = 0; this.closed = []; this.handlers = new Map(); }
@@ -226,7 +227,7 @@ test("page boots with the join controls, and control recovery does not touch med
     classList: { add() {}, remove() {}, toggle() {} }, querySelector: () => ({ textContent: "" }),
     addEventListener() {}, removeEventListener() {}, appendChild() {}, replaceChildren() {} });
   const storage = new Map();
-  const context = vm.createContext({ RoomConnection, JOIN_RELEASE, console,
+  const context = vm.createContext({ RoomConnection, JOIN_RELEASE, ...localMedia, console,
     document: { visibilityState: "visible", getElementById(id) { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); }, querySelectorAll: () => [], addEventListener() {}, createElement: element },
     Option: function (text, value) { this.text = text; this.value = value; },
     localStorage: { getItem: (key) => storage.get(key), setItem: (k, v) => storage.set(k, v), removeItem: (k) => storage.delete(k) },
@@ -236,7 +237,7 @@ test("page boots with the join controls, and control recovery does not touch med
     setTimeout, clearTimeout, setInterval, clearInterval, performance,
   });
   const source = readFileSync(new URL("../public/app.js", import.meta.url), "utf8")
-    .replace(/^import[^\n]+\n/, "").replace(/\ninitialize\(\);\s*$/, "");
+    .replace(/^import[^\n]+\n/gm, "").replace(/\ninitialize\(\);\s*$/, "");
   vm.runInContext(source + "\nbindEvents();globalThis.app={state,roomConnection,connectToRoom,handleSocketClose};", context);
   const { state, roomConnection, connectToRoom } = context.app;
   roomConnection.maxAttempts = 1;

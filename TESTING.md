@@ -1,8 +1,30 @@
 # Release checklist
 
+## v2.3.8 local-player scope
+
+`npm run check` covers 57 checks, including local source validation, playback
+clock rate/pause/buffering, heartbeat expiry, disabled embedded text tracks and
+the previous join/security/route regressions. See RELEASE-VERIFICATION.md for
+real-browser integration results and explicit exclusions.
+
+Manual production acceptance:
+1. Refresh both endpoints after verifying the release ID. Open a supported local
+   movie from the room link; the tab must open before any file is chosen.
+2. Choose the file inside that player. Return to the room and click Share local
+   player; select its Chrome Tab and enable audio, not Window/Entire Screen.
+3. Check actual sound on the viewer, captured FPS and decoded FPS over 30+ min.
+4. Upload matching English/Russian SRT/VTT; choose a different language at each
+   endpoint. Pause, resume and seek via room controls and native source controls.
+5. Close the source tab. Controls must disable immediately if the close message
+   arrives, or within approximately 11 seconds on heartbeat expiry.
+6. Try an unsupported file: the player must show a decode/format error, not the
+   old popup-permission message. Do not claim every MKV can play.
+7. Repeat after a temporary control-network loss; media routing must retain the
+   v2.3.7 join-fix behavior. A browser/headless fixture cannot prove this on Anna's network.
+
 ## v2.3.7 join-fix regression scope
 
-`npm run check` covers 49 checks (architecture/source assertions, connection
+The previous v2.3.7 `npm run check` covered 49 checks (architecture/source assertions, connection
 controller runtime tests, app integration with a simulated DOM, server reconnect
 grace, and security). These checks do not prove China–Russia reachability.
 
