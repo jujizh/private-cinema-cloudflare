@@ -1,4 +1,6 @@
-import { disableEmbeddedTextTracks, formatMovieTime } from "./local-media.js?v=2.3.8-local-player-20261028";
+import { disableEmbeddedTextTracks, formatMovieTime } from "./local-media.js?v=2.3.10-external-audio-20261028";
+import { inspectAudioFile, audioAdvice } from "./audio-inspector.js?v=2.3.10-external-audio-20261028";
+import { ExternalAudio } from "./external-audio.js?v=2.3.10-external-audio-20261028";
 
 const params = new URLSearchParams(location.search);
 const channelId = params.get("channel") || "";
@@ -9,6 +11,19 @@ const status = document.getElementById("playerStatus");
 const fileLabel = document.getElementById("fileLabel");
 const connection = document.getElementById("roomConnection");
 const failure = document.getElementById("playerError");
+const audioNotice = document.getElementById("audioNotice");
+const audioMessage = document.getElementById("audioMessage");
+let audioInspection = { status: "unknown" };
+let audioController = null;
+let fileGeneration = 0;
+const externalMessage = document.getElementById('externalAudioStatus');
+const sidecar = new ExternalAudio(movie, document.getElementById('externalAudio'), (message) => { externalMessage.textContent = message; });
+document.getElementById('externalAudioFile').addEventListener('change', (event) => {
+  const file = event.target.files?.[0]; if (file && objectUrl) sidecar.load(file);
+  event.target.value = '';
+});
+document.getElementById('removeExternalAudio').addEventListener('click', () => { sidecar.clear(); externalMessage.textContent = '已移除外置音轨，恢复视频原音轨。'; });
+document.getElementById('externalVolume').addEventListener('input', (event) => { sidecar.audio.volume = Number(event.target.value); });
 let objectUrl = "";
 let movieName = "";
 let lastPeriodicUpdate = 0;
@@ -29,11 +44,21 @@ function report(reason, force = false) {
   const now = performance.now();
   if (!force && now - lastPeriodicUpdate < 750) return;
   lastPeriodicUpdate = now;
+  const audio = updateAudioNotice();
   channel?.postMessage({ type: "player-state", reason, name: movieName, status: mediaStatus,
     hasFile: Boolean(objectUrl), time: Number(movie.currentTime) || 0,
     duration: Number.isFinite(movie.duration) ? movie.duration : 0, rate: movie.playbackRate,
-    paused: movie.paused || movie.ended, waiting: waiting || movie.seeking });
+    paused: movie.paused || movie.ended, waiting: waiting || movie.seeking,
+    audioStatus: audio.status, audioWarning: audio.warning ? audio.summary : "" });
   if (mediaStatus === "ready") status.textContent = `${movie.paused ? "Paused / 已暂停" : waiting ? "Buffering / 正在读取本地文件" : "Playing / 播放中"} · ${formatMovieTime(movie.currentTime)} / ${formatMovieTime(movie.duration)}`;
+}
+
+function updateAudioNotice() {
+  const advice = sidecar.active ? { status: 'external', warning: false, summary: `使用外置音轨：${sidecar.name}。原视频音轨已静音，声音来自此标签页的外置音频。` } : audioAdvice(audioInspection, movie);
+  audioNotice.hidden = !objectUrl;
+  audioNotice.dataset.warning = String(advice.warning);
+  audioMessage.textContent = advice.summary;
+  return advice;
 }
 
 function announce() {
@@ -56,6 +81,12 @@ function showPlaybackError() {
 picker.addEventListener("change", () => {
   const file = picker.files?.[0];
   if (!file) return;
+  sidecar.clear(); externalMessage.textContent = '可加载同一集的 .m4a 音轨；换视频后需重新加载对应音轨。';
+  document.getElementById('externalAudioFile').disabled = false;
+  const generation = ++fileGeneration;
+  audioController?.abort();
+  audioController = new AbortController();
+  audioInspection = { status: "pending" };
   movie.pause();
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = URL.createObjectURL(file);
@@ -73,6 +104,11 @@ picker.addEventListener("change", () => {
   status.textContent = "Loading local file / 正在读取本地文件";
   picker.value = "";
   report("load", true);
+  inspectAudioFile(file, { signal: audioController.signal }).then((inspection) => {
+    if (generation !== fileGeneration) return;
+    audioInspection = inspection;
+    report("audio-inspected", true);
+  });
 });
 
 for (const event of ["play", "pause", "seeked", "loadedmetadata", "ended", "playing", "canplay", "waiting", "stalled", "seeking", "ratechange", "loadeddata"]) {
@@ -121,6 +157,8 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") document.body.dataset.sharing = "false";
 });
 window.addEventListener("beforeunload", () => {
+  sidecar.destroy();
+  audioController?.abort();
   mediaStatus = "closed";
   movie.pause();
   report("closed", true);

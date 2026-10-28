@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>Local movie / 本地电影 — Private Cinema</title>
-  <link rel="stylesheet" href="/player.css?v=2.3.8-local-player-20261028">
+  <link rel="stylesheet" href="/player.css?v=2.3.10-external-audio-20261028">
 </head>
 <body>
   <header>
@@ -26,11 +26,28 @@
     </section>
   </main>
   <footer>
+    <section class="audio-notice" aria-label="外置音轨">
+      <label class="choose">加载本地音轨<input id="externalAudioFile" type="file" accept=".m4a,.aac,.mp3,.wav,audio/*" disabled></label>
+      <button id="removeExternalAudio" type="button">移除外置音轨</button>
+      <label>外置音量 <input id="externalVolume" type="range" min="0" max="1" step="0.05" value="1"></label>
+      <p id="externalAudioStatus" role="status">先打开原视频，再加载本地工具生成的同一集 .m4a；不上传服务器。</p>
+      <audio id="externalAudio" preload="auto"></audio>
+    </section>
     <div class="file-meta"><strong id="fileLabel">No movie selected / 未选择电影</strong><span id="playerStatus" role="status" aria-live="polite">Only local playback; no cloud upload / 仅本地播放</span></div>
+    <section id="audioNotice" class="audio-notice" aria-label="音频兼容性检查" hidden>
+      <p id="audioMessage" role="status" aria-live="polite"></p>
+      <details>
+        <summary>源标签页无声？查看本地处理方法</summary>
+        <p>先检查播放器、网站及系统是否静音。若 MKV 使用 DTS / TrueHD 等不兼容音轨，可在电脑上用 FFmpeg 将音频转为 AAC，另存兼容 MP4。网页只做检查，不安装助手、不上传或转换电影。</p>
+        <p>以下示例适用于视频本身已兼容（例如 H.264）的文件。请先安装 FFmpeg，在本地终端把文件路径替换为实际路径。只转换第一条音轨为立体声 AAC，视频不重压；新文件不带内嵌字幕，原片不覆盖。</p>
+        <pre>ffmpeg -n -i "原片.mkv" -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 192k -ac 2 -sn -dn -movflags +faststart "兼容版.mp4"</pre>
+        <p>多音轨文件需先确认要保留哪条音轨。将转换好的文件重新选入播放器，确认有声音，再共享该 Chrome 标签页并勾选音频。</p>
+      </details>
+    </section>
     <p>Embedded text subtitles are disabled when the browser exposes them. Burned-in subtitles cannot be removed. 可关闭的内嵌文本字幕会隐藏；压入画面的硬字幕仍会保留。</p>
     <p>画面模式下按 Esc 显示操作栏。Keep this player visible if capture FPS drops / 帧率下降时请把此页移到独立可见窗口。</p>
     <p id="playerError" class="error" role="alert" hidden></p>
   </footer>
-  <script type="module" src="/player.js?v=2.3.8-local-player-20261028"></script>
+  <script type="module" src="/player.js?v=2.3.10-external-audio-20261028"></script>
 </body>
 </html>

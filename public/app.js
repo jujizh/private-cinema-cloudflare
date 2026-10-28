@@ -1,5 +1,5 @@
-import { RoomConnection, JOIN_RELEASE } from "./room-connection.js?v=2.3.8-local-player-20261028";
-import { normaliseLocalState, localMovieClock, localCaptureDecision, formatMovieTime } from "./local-media.js?v=2.3.8-local-player-20261028";
+import { RoomConnection, JOIN_RELEASE } from "./room-connection.js?v=2.3.10-external-audio-20261028";
+import { normaliseLocalState, localMovieClock, localCaptureDecision, formatMovieTime } from "./local-media.js?v=2.3.10-external-audio-20261028";
 
 const $ = (id) => document.getElementById(id);
 // Small private rooms prefer direct media because it has performed better than
@@ -2218,7 +2218,9 @@ function updateLocalPlaybackControls() {
   ui.localPlayerStatus.textContent = !player ? "Waiting for player tab / 等待播放器标签页"
     : !fresh ? "Player is not responding / 播放器暂未响应"
     : labels[player.status] || `${player.name} · ${shared}`;
+  if (player?.audioWarning) ui.localPlayerStatus.textContent += ` · ${player.audioWarning}`;
   ui.localPlayerStatus.title = ui.localPlayerStatus.textContent;
+  ui.localPlayerStatus.dataset.audioWarning = player?.audioWarning ? "true" : "false";
   for (const button of [ui.localPlayPause, ui.localSeekBack, ui.localSeekForward]) button.disabled = !usable;
   ui.localShare.disabled = !usable || Boolean(state.localStream) || !state.connected;
   ui.localPlayPause.textContent = player?.paused ? "Play / 播放" : "Pause / 暂停";

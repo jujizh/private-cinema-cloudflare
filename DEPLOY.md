@@ -1,11 +1,11 @@
-# Deploying v2.3.8 Local Player on Cloudflare
+# Deploying v2.3.9 Audio Check on Cloudflare
 
 Read [UPGRADE-2.3.8.md](UPGRADE-2.3.8.md) first. Deploy the complete package,
 including `public/local-media.js`, the player assets, and the included tests.
 Do not mix old and new files or upload node_modules/.wrangler/build-output.
 
-Verify `/api/config` reports `version: "2.3.8"` and
-`release: "2.3.8-local-player-20261028"`; a version number alone is not sufficient.
+Verify `/api/config` reports `version: "2.3.10"` and
+`release: "2.3.10-external-audio-20261028"`; a version number alone is not sufficient.
 
 This package targets the existing `jujizh-jiahao-private-cinema-cloudflare`
 Worker and `cinema.mofangnet.eu.org` domain. Preserve the existing Durable

@@ -1,5 +1,5 @@
 // Shared local-only helpers. Movie bytes and object URLs never leave the player.
-export const LOCAL_MEDIA_RELEASE = "2.3.8-local-player-20261028";
+export const LOCAL_MEDIA_RELEASE = "2.3.10-external-audio-20261028";
 
 export function normaliseLocalState(data, now = performance.now()) {
   if (data?.type !== "player-state" || !Number.isFinite(data.time) || data.time < 0) return null;
@@ -11,7 +11,9 @@ export function normaliseLocalState(data, now = performance.now()) {
   const waiting = Boolean(data.waiting);
   return { status, time: data.time, duration, rate, hasFile, paused, waiting,
     ready: hasFile && status === "ready", playing: hasFile && status === "ready" && !paused && !waiting,
-    name: String(data.name || "").replace(/[\u0000-\u001f]/g, "").slice(0, 180), receivedAt: now };
+    name: String(data.name || "").replace(/[\u0000-\u001f]/g, "").slice(0, 180),
+    audioStatus: String(data.audioStatus || "unknown").slice(0, 24),
+    audioWarning: String(data.audioWarning || "").replace(/[\u0000-\u001f]/g, "").slice(0, 240), receivedAt: now };
 }
 
 export function localMovieClock(state, now = performance.now()) {

@@ -1,4 +1,33 @@
-# Verification — 2.3.8-local-player-20261028
+# Verification — 2.3.10-external-audio-20261028
+
+66 existing automated checks passed. Chrome 156 tested the complete episode-8
+MKV with generated AAC M4A: play/pause, seeks to 10/1000/2600 seconds, 1.5x
+speed, volume and detach passed with no page errors. One sampled drift was
+0.078 seconds, not a worst-case bound. Room/subtitle regression fixture passed.
+Desktop/mobile screenshots inspected. Cross-country tab-audio capture and
+continuous full-episode playback were not tested.
+
+CinemaAudio 1.1 exported the full audio in 81.938 seconds: 69,246,914 bytes.
+Output AAC stereo duration 2834.667 seconds; input container duration 2852.433.
+Cache reuse passed with the final executable; failures now preserve details.
+
+Deployment completed before the user's later GitHub-first instruction could
+stop it. Version: 1cf6bb42-26c1-4046-bff8-66fd61aed1dc. No further direct
+deploy or rollback was performed after that instruction. GitHub unchanged.
+
+## Historical audio-check verification
+
+2026-10-28: 66 automated checks passed, including Matroska audio track parser,
+unknown/malformed metadata, bounded 5+ GiB offset reads and decoded-audio
+override. Real Chrome 156 local fixture read the user's 7.3 GB MKV and found
+`A_DTS` by reading 65,536 bytes of metadata. The room UI showed the warning;
+switching to another file cleared it. No movie upload occurred. Browser test
+also covered native player, clock controls, independent subtitles and mobile UI.
+Wrangler dry run passed; this release has not been deployed. This is a risk
+indicator, not a universal codec-support guarantee; other containers are not
+parsed and current sound output is not automatically proven.
+
+## Historical v2.3.8 verification
 
 Completed locally on 2026-10-28:
 

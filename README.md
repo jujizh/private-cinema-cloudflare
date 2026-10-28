@@ -1,6 +1,17 @@
-# Jiahao Private Cinema v2.3.8 — Local Player
+# Jiahao Private Cinema v2.3.10 — External Audio
 
-Release ID: `2.3.8-local-player-20261028`.
+See UPGRADE-2.3.10.md. Host can load a local M4A beside the original movie.
+The player follows video pause, seek and rate, corrects drift, and pauses on
+audio buffering/end/error. Audio stays local and is shared via tab audio.
+No local service or browser-native process integration is installed.
+
+Release ID: `2.3.10-external-audio-20261028`.
+
+Matroska audio track metadata is inspected locally with bounded reads. Risky
+codecs are flagged as potential compatibility issues; unknown inspection is not
+reported as missing audio. No movie is uploaded for inspection. There is no
+web-to-desktop service, local network access, or browser-initiated conversion.
+See [UPGRADE-2.3.9.md](UPGRADE-2.3.9.md).
 
 See [UPGRADE-2.3.8.md](UPGRADE-2.3.8.md) for the new local-movie workflow and limitations.
 The player opens as a native link **before** selecting a file, eliminating the

@@ -11,6 +11,7 @@ a.button{display:inline-flex;align-items:center;justify-content:center;text-deco
 .local-progress input{flex:1;min-width:60px;height:24px;padding:0;accent-color:#b890f8;border:0;box-shadow:none}
 .local-progress span:last-child{flex:none;font-variant-numeric:tabular-nums}
 .local-playback .local-help{margin-top:9px;color:#9b98a4;font-size:11px}
+.local-playback #localPlayerStatus[data-audio-warning="true"]{color:#f0c782}
 @media(max-width:700px){.control-group.caption-controls{flex-wrap:wrap;overflow:visible;gap:9px}.caption-controls .quality-control select{max-width:44vw}}
 @media(max-width:450px){.local-buttons #localShare{flex-basis:100%}}
 :root{
