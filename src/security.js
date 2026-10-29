@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Private Cinema contributors.
+// Open-source snapshot prepared 2026-10-29; see CHANGELOG.md.
 const encoder = new TextEncoder();
 
 export function randomToken(byteLength = 24) {
@@ -32,7 +35,7 @@ async function hmacKey(secret, usages) {
 
 export async function signToken(claims, secret) {
   if (!secret || secret.length < 32) throw new Error("APP_AUTH_SECRET must be at least 32 characters");
-  const payload = base64UrlEncode(JSON.stringify({ v: 2, iss: "jiahao-cinema", ...claims }));
+  const payload = base64UrlEncode(JSON.stringify({ v: 2, iss: "private-cinema", ...claims }));
   const key = await hmacKey(secret, ["sign"]);
   const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
   return `${payload}.${base64UrlEncode(new Uint8Array(signature))}`;
@@ -52,7 +55,7 @@ export async function verifyToken(token, secret, now = Date.now()) {
     );
     if (!valid) return null;
     const claims = JSON.parse(new TextDecoder().decode(base64UrlDecode(payload)));
-    if (claims.v !== 2 || claims.iss !== "jiahao-cinema") return null;
+    if (claims.v !== 2 || claims.iss !== "private-cinema") return null;
     if (!Number.isFinite(claims.exp) || claims.exp * 1000 <= now) return null;
     return claims;
   } catch {

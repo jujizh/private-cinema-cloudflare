@@ -1,5 +1,9 @@
-import { RoomConnection, JOIN_RELEASE } from "./room-connection.js?v=2.3.11-caption-sync-20261029";
-import { normaliseLocalState, localMovieClock, localCaptureDecision, formatMovieTime } from "./local-media.js?v=2.3.11-caption-sync-20261029";
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Private Cinema contributors.
+// Open-source snapshot prepared 2026-10-29; see CHANGELOG.md.
+import { RoomConnection, JOIN_RELEASE } from "./room-connection.js?v=2.4.0-open-source-20261029";
+import { siteConfig, applySiteConfig } from "./site-config.js?v=2.4.0-open-source-20261029";
+import { normaliseLocalState, localMovieClock, localCaptureDecision, formatMovieTime } from "./local-media.js?v=2.4.0-open-source-20261029";
 
 const $ = (id) => document.getElementById(id);
 // Small private rooms prefer direct media because it has performed better than
@@ -886,7 +890,7 @@ async function createRoom(event) {
     });
     state.defaultGuestToken = result.viewer.token;
     storeInvite(result.host.token);
-    state.name = localStorage.getItem("cinema.ownerName") || "Jiahao";
+    state.name = localStorage.getItem("cinema.ownerName") || siteConfig.defaultHostName;
     await connectToRoom();
   } catch (error) {
     ui.dashboardError.textContent = error.message;
@@ -903,7 +907,7 @@ async function resumeRoom(roomId) {
       body: JSON.stringify({ role: "host", label: "Owner", expiresInHours: 24 }),
     });
     storeInvite(result.invite.token);
-    state.name = localStorage.getItem("cinema.ownerName") || "Jiahao";
+    state.name = localStorage.getItem("cinema.ownerName") || siteConfig.defaultHostName;
     await connectToRoom();
   } catch (error) {
     ui.dashboardError.textContent = error.message;
@@ -2975,4 +2979,5 @@ function bindEvents() {
   });
 }
 
+applySiteConfig();
 initialize();

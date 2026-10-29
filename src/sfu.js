@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Private Cinema contributors.
+// Open-source snapshot prepared 2026-10-29; see CHANGELOG.md.
 import { HttpError } from "./security.js";
 
 const REALTIME_BASE = "https://rtc.live.cloudflare.com/v1";

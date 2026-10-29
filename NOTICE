@@ -1,0 +1,12 @@
+Private Cinema
+Copyright 2026 Private Cinema contributors.
+
+This distribution contains the project's original web application, local
+audio-preparation wrapper, tests and documentation under Apache-2.0.
+Personalized branding has been replaced by neutral, configurable labels.
+This collective attribution identifies the project; it is not a claim to
+copyright in third-party software or in users' movies, audio or subtitles.
+
+FFmpeg is not included or relicensed. Cloudflare, Microsoft, Node.js,
+Playwright and other third parties retain their respective rights.
+See THIRD_PARTY_NOTICES.md and DISCLAIMER.md.
