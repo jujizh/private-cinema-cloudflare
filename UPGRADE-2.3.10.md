@@ -8,4 +8,4 @@
 
 原容器时长2852.433秒，导出音轨2834.667秒。1.0工具超过2秒差即拒绝可能误报；1.1记录具体校验数值并采用更合理的差值检查。这不证明原片末尾所有时间都有声音，请核对片尾是否匹配。
 
-完整包部署后核对 `/api/config` release 为 `2.3.10-external-audio-20261028`。保留原 Worker 名称、绑定、密钥和 migrations。不要上传测试媒体、node_modules 或 build-output。
+完整包部署后核对 `/api/config` release 为 `2.3.11-caption-sync-20261029`。保留原 Worker 名称、绑定、密钥和 migrations。不要上传测试媒体、node_modules 或 build-output。

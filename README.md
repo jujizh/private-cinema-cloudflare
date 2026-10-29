@@ -1,11 +1,22 @@
-# Jiahao Private Cinema v2.3.10 — External Audio
+# Jiahao Private Cinema v2.3.11 — Caption Sync
+
+See [UPGRADE-2.3.11.md](UPGRADE-2.3.11.md) for the Chinese upgrade and test guide.
+Starting a local movie from the middle now requests a fresh source-clock snapshot.
+When the browser cannot identify a selected tab, the host can explicitly confirm
+the local-player time source instead of silently starting room subtitles at zero.
+Subtitle event bursts are coalesced, preserving the final pause/seek state, and
+server echoes cannot overwrite the local host's authoritative player clock.
+The external-audio workflow and P2P/SFU routing are otherwise retained.
+This release is delivered as source only; it has not been deployed.
+
+## External audio (retained from v2.3.10)
 
 See UPGRADE-2.3.10.md. Host can load a local M4A beside the original movie.
 The player follows video pause, seek and rate, corrects drift, and pauses on
 audio buffering/end/error. Audio stays local and is shared via tab audio.
 No local service or browser-native process integration is installed.
 
-Release ID: `2.3.10-external-audio-20261028`.
+Release ID: `2.3.11-caption-sync-20261029`.
 
 Matroska audio track metadata is inspected locally with bounded reads. Risky
 codecs are flagged as potential compatibility issues; unknown inspection is not

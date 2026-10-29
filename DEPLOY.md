@@ -1,11 +1,15 @@
-# Deploying v2.3.9 Audio Check on Cloudflare
+# Deploying v2.3.11 Caption Sync on Cloudflare
+
+For this upgrade, see [UPGRADE-2.3.11.md](UPGRADE-2.3.11.md). Use your existing
+GitHub-to-Cloudflare deployment; the supplied ZIP contains source, not a live
+deployment. Existing bindings and secrets must remain unchanged.
 
 Read [UPGRADE-2.3.8.md](UPGRADE-2.3.8.md) first. Deploy the complete package,
 including `public/local-media.js`, the player assets, and the included tests.
 Do not mix old and new files or upload node_modules/.wrangler/build-output.
 
-Verify `/api/config` reports `version: "2.3.10"` and
-`release: "2.3.10-external-audio-20261028"`; a version number alone is not sufficient.
+Verify `/api/config` reports `version: "2.3.11"` and
+`release: "2.3.11-caption-sync-20261029"`; a version number alone is not sufficient.
 
 This package targets the existing `jujizh-jiahao-private-cinema-cloudflare`
 Worker and `cinema.mofangnet.eu.org` domain. Preserve the existing Durable

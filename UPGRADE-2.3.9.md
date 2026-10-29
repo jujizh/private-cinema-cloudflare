@@ -4,4 +4,4 @@
 
 网页不连接本地服务，也不运行转换。独立 Windows 工具和教程单独交付；需用户本机已有 FFmpeg 与 ffprobe。
 
-部署完整包并核对 `/api/config` 的版本 `2.3.9`、release `2.3.10-external-audio-20261028`。保留现有 Worker 名称、绑定、密钥和 Durable Object migrations；勿上传 node_modules、build-output 或测试媒体。
+部署完整包并核对 `/api/config` 的版本 `2.3.9`、release `2.3.11-caption-sync-20261029`。保留现有 Worker 名称、绑定、密钥和 Durable Object migrations；勿上传 node_modules、build-output 或测试媒体。

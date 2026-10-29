@@ -128,8 +128,8 @@ async function routeApi(request, env) {
 
   if (url.pathname === "/api/config" && request.method === "GET") {
     return jsonResponse({
-      version: "2.3.10",
-      release: "2.3.10-external-audio-20261028",
+      version: "2.3.11",
+      release: "2.3.11-caption-sync-20261029",
       realtimeConfigured: realtimeConfigured(env),
       turnConfigured: Boolean(env.TURN_KEY_ID && env.TURN_KEY_API_TOKEN),
       ownerConfigured: Boolean(env.ADMIN_PASSWORD && env.APP_AUTH_SECRET?.length >= 32),

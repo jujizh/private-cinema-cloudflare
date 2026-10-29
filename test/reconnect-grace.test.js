@@ -56,6 +56,22 @@ function fixture() {
   return { cinema: new CinemaRoom(ctx, {}), messages, values };
 }
 
+test("subtitle clock budget accepts four updates per second and the final paused seek", async () => {
+  const { cinema } = fixture();
+  await cinema.ready;
+  const host = cinema.ctx.getWebSockets()[0];
+  for (let i = 0; i < 40; i++) {
+    await cinema.webSocketMessage(host, JSON.stringify({ type: "caption:clock", clock: {
+      time: 1000 + i, playing: true, source: "local-player", rate: 1,
+    } }));
+  }
+  await cinema.webSocketMessage(host, JSON.stringify({ type: "caption:clock", clock: {
+    time: 1600, playing: false, source: "local-player", rate: 1,
+  } }));
+  assert.equal(cinema.room.captionClock.time, 1600);
+  assert.equal(cinema.room.captionClock.playing, false);
+});
+
 test("temporary viewer control loss is held in presence until the grace expires", async () => {
   const { cinema, messages } = fixture();
   await cinema.ready;

@@ -1,5 +1,20 @@
 # Release checklist
 
+## v2.3.11 caption-sync scope
+
+67 automated checks passed. Real Chrome local integration tested a synthetic
+video plus sidecar audio: seek before sharing, explicit source confirmation,
+clock snapshot, room play/pause/seek/rate, final paused seek after an event burst,
+independent English/Russian captions and mobile overflow. The fixture simulates
+the selected capture track and uses local WebSockets, not production WebRTC.
+
+Manual acceptance after deployment: refresh both endpoints and reopen the local
+player, load matching video/audio/subtitle versions, seek to the middle BEFORE
+sharing, then use Share local player and enable tab audio. Check cue alignment
+on both endpoints, then pause, resume and seek forward/back. Verify the release
+ID is `2.3.11-caption-sync-20261029`. Test real network/video buffering separately;
+this change does not guarantee frame-exact subtitles during receiver freezes.
+
 ## v2.3.8 local-player scope
 
 `npm run check` covers 57 checks, including local source validation, playback

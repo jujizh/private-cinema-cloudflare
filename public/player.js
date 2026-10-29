@@ -1,6 +1,6 @@
-import { disableEmbeddedTextTracks, formatMovieTime } from "./local-media.js?v=2.3.10-external-audio-20261028";
-import { inspectAudioFile, audioAdvice } from "./audio-inspector.js?v=2.3.10-external-audio-20261028";
-import { ExternalAudio } from "./external-audio.js?v=2.3.10-external-audio-20261028";
+import { disableEmbeddedTextTracks, formatMovieTime } from "./local-media.js?v=2.3.11-caption-sync-20261029";
+import { inspectAudioFile, audioAdvice } from "./audio-inspector.js?v=2.3.11-caption-sync-20261029";
+import { ExternalAudio } from "./external-audio.js?v=2.3.11-caption-sync-20261029";
 
 const params = new URLSearchParams(location.search);
 const channelId = params.get("channel") || "";
@@ -126,6 +126,7 @@ movie.textTracks?.addEventListener("addtrack", () => disableEmbeddedTextTracks(m
 movie.textTracks?.addEventListener("change", () => disableEmbeddedTextTracks(movie));
 
 channel?.addEventListener("message", async ({ data }) => {
+  if (data?.type === "clock-request") report("clock-snapshot", true);
   if (data?.type === "room-ready") {
     roomConnected = true;
     connection.textContent = "Room linked / 已连接房间";

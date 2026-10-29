@@ -559,7 +559,8 @@ export class CinemaRoom {
 
     if (data.type === "caption:clock") {
       if (!["host", "owner"].includes(meta.role)) return;
-      if (!this.consumeSocketRate(socket, meta, "captionClock", 20, 10_000)) return;
+      // Client coalesces play/seek/buffering bursts to at most four sends/sec.
+      if (!this.consumeSocketRate(socket, meta, "captionClock", 60, 10_000)) return;
       const input = data.clock && typeof data.clock === "object" ? data.clock : {};
       const time = Math.max(0, Math.min(24 * 60 * 60, Number(input.time) || 0));
       const source = ["capture", "local-player", "manual"].includes(input.source) ? input.source : "capture";

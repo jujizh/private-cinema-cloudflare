@@ -1,4 +1,29 @@
-# Verification — 2.3.10-external-audio-20261028
+# Verification — 2.3.11-caption-sync-20261029
+
+2026-10-29: `npm run check` passed 67 tests and JavaScript syntax checks.
+Wrangler `deploy --dry-run` passed, recognizing the existing three Durable
+Object bindings and 10 public assets. No deployment or GitHub write performed.
+
+Chrome 156.0.8078.48 passed a local HTTP/WebSocket integration fixture with
+real native video and external audio elements using synthetic VP8/Opus WebM:
+
+- Seek to 5 seconds BEFORE starting capture; a simulated browser-tab track
+  has no Capture Handle. Host confirmation binds subtitles to the source
+  clock rather than zero; a clock-snapshot request refreshes that state.
+- Room play/pause/seek and 1.5x rate propagate through the real source player;
+  external audio follows play/pause/seek. Paused caption time remains fixed.
+- 100 forced updates plus a final paused seek coalesce to a bounded number of
+  sends; a separate viewer receives the final paused time of 9 seconds.
+- Independent English/Russian captions, embedded text-track disabling, no
+  movie upload requests, readable unsupported-file errors and mobile layouts.
+- Zero page errors. The source chooser is mocked; no actual SFU/P2P session,
+  China-Russia path, full movie endurance test or receiver-delay measurement.
+
+Source changes are limited to subtitle-clock flow, source confirmation, its
+server message budget and release markers/docs/tests. No native audio tool,
+codec settings, routing policy, migrations or credentials are changed.
+
+## Historical v2.3.10 verification (not rerun in this release)
 
 66 existing automated checks passed. Chrome 156 tested the complete episode-8
 MKV with generated AAC M4A: play/pause, seeks to 10/1000/2600 seconds, 1.5x

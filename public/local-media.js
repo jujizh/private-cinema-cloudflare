@@ -1,5 +1,5 @@
 // Shared local-only helpers. Movie bytes and object URLs never leave the player.
-export const LOCAL_MEDIA_RELEASE = "2.3.10-external-audio-20261028";
+export const LOCAL_MEDIA_RELEASE = "2.3.11-caption-sync-20261029";
 
 export function normaliseLocalState(data, now = performance.now()) {
   if (data?.type !== "player-state" || !Number.isFinite(data.time) || data.time < 0) return null;

@@ -1,5 +1,5 @@
-import { RoomConnection, JOIN_RELEASE } from "./room-connection.js?v=2.3.10-external-audio-20261028";
-import { normaliseLocalState, localMovieClock, localCaptureDecision, formatMovieTime } from "./local-media.js?v=2.3.10-external-audio-20261028";
+import { RoomConnection, JOIN_RELEASE } from "./room-connection.js?v=2.3.11-caption-sync-20261029";
+import { normaliseLocalState, localMovieClock, localCaptureDecision, formatMovieTime } from "./local-media.js?v=2.3.11-caption-sync-20261029";
 
 const $ = (id) => document.getElementById(id);
 // Small private rooms prefer direct media because it has performed better than
@@ -97,6 +97,8 @@ const state = {
   captionLoadGeneration: 0,
   captionClock: null,
   captionClockLastSentAt: 0,
+  captionClockPending: null,
+  captionClockSendTimer: null,
   playerChannel: null,
   playerChannelId: "",
   playerState: null,
@@ -1087,7 +1089,7 @@ function handleSocketMessage(raw) {
   if (message.type === "reaction") showReaction(message.emoji);
   if (message.type === "quality:update") updateParticipantQuality(message.participant);
   if (message.type === "captions:update") syncCaptionLibrary(message.captions || []);
-  if (message.type === "caption:clock") applyCaptionClock(message.clock);
+  if (message.type === "caption:clock" && !(state.role === "host" && state.localCaptureChannelId)) applyCaptionClock(message.clock);
   if (message.type === "p2p:signal") handleDirectSignal(message);
   if (message.type === "room:lock") {
     state.room.locked = message.locked;
@@ -1845,11 +1847,22 @@ async function startBroadcast(options = {}) {
     const videoTrack = stream.getVideoTracks()[0];
     let captureHandle = null;
     try { captureHandle = videoTrack?.getCaptureHandle?.(); } catch {}
-    const decision = localCaptureDecision(videoTrack?.getSettings?.(), captureHandle, state.playerChannelId, location.origin, preferLocal);
+    const settings = videoTrack?.getSettings?.();
+    let decision = localCaptureDecision(settings, captureHandle, state.playerChannelId, location.origin, preferLocal);
+    // A missing Capture Handle must not silently start subtitles at zero when
+    // the host is watching a local movie from the middle. Bind only with explicit consent.
+    if (!decision.local && !decision.error && !captureHandle?.handle && settings?.displaySurface === "browser"
+      && state.playerState?.ready && performance.now() - state.playerState.receivedAt <= 10_000
+      && confirm("无法自动识别共享标签页。你正在共享刚打开的本地电影播放器吗？确定：字幕跟随该电影当前位置；取消：按外部网站手动计时。")) {
+      decision = localCaptureDecision(settings, captureHandle, state.playerChannelId, location.origin, true);
+    }
     if (decision.error) throw new Error(decision.error);
     state.localCaptureChannelId = decision.local ? state.playerChannelId : "";
     state.localCaptureVerified = Boolean(decision.verified);
-    if (decision.local) state.playerChannel?.postMessage({ type: "sharing", active: true });
+    if (decision.local) {
+      state.playerChannel?.postMessage({ type: "sharing", active: true });
+      state.playerChannel?.postMessage({ type: "clock-request" });
+    }
     videoTrack?.addEventListener("capturehandlechange", () => {
       if (state.localStream !== stream || !state.localCaptureChannelId) return;
       let nextHandle = null;
@@ -2197,7 +2210,7 @@ function openLocalMovie(event) {
     updateLocalPlaybackControls();
     if (state.localStream && state.localCaptureChannelId === channelId) {
       const clock = localMovieClock(next);
-      const force = ["play", "pause", "seeked", "loadedmetadata", "ended", "waiting", "stalled", "seeking", "closed", "load", "ratechange", "error", "playing"].includes(data.reason);
+      const force = ["play", "pause", "seeked", "loadedmetadata", "ended", "waiting", "stalled", "seeking", "closed", "load", "ratechange", "error", "playing", "clock-snapshot"].includes(data.reason);
       publishCaptionClock(clock.time, clock.playing, "local-player", force, clock.rate);
     }
   });
@@ -2439,9 +2452,19 @@ function publishCaptionClock(time, playing, source = "manual", force = false, ra
   if (state.role !== "host") return;
   const now = performance.now();
   applyCaptionClock({ time, playing, source, rate });
-  if (!force && now - state.captionClockLastSentAt < 900) return;
-  state.captionClockLastSentAt = now;
-  sendSocket({ type: "caption:clock", clock: { time: Math.max(0, Number(time) || 0), playing: Boolean(playing), source, rate } });
+  state.captionClockPending = { time: Math.max(0, Number(time) || 0), playing: Boolean(playing), source, rate, at: now };
+  clearTimeout(state.captionClockSendTimer);
+  const delay = Math.max(0, (force ? 250 : 900) - (now - state.captionClockLastSentAt));
+  const flush = () => {
+    state.captionClockSendTimer = null;
+    const pending = state.captionClockPending;
+    if (!pending) return;
+    state.captionClockPending = null;
+    state.captionClockLastSentAt = performance.now();
+    const elapsed = pending.playing ? Math.max(0, performance.now() - pending.at) / 1000 * pending.rate : 0;
+    sendSocket({ type: "caption:clock", clock: { time: pending.time + elapsed, playing: pending.playing, source: pending.source, rate: pending.rate } });
+  };
+  if (delay === 0) flush(); else state.captionClockSendTimer = setTimeout(flush, delay);
 }
 
 function toggleCaptionClock() {
@@ -2848,6 +2871,8 @@ async function endScreening() {
 }
 
 function leaveRoom() {
+  clearTimeout(state.captionClockSendTimer);
+  state.captionClockPending = null;
   state.intentionalClose = true;
   clearTimeout(state.reconnectTimer);
   clearInterval(state.localPlayerTimer);

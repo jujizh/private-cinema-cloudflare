@@ -1,5 +1,5 @@
 // Control/signalling only. This controller never owns or closes media tracks.
-export const JOIN_RELEASE = "2.3.10-external-audio-20261028";
+export const JOIN_RELEASE = "2.3.11-caption-sync-20261029";
 
 const terminalCodes = new Set([
   "join_cancelled", "room_ended", "room_expired", "invite_invalid", "invite_required",
