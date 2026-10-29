@@ -1,7 +1,17 @@
-Copyright © 2026 Jiahao Zhang. All rights reserved.
+# 版权与许可
 
-This repository and its contents are proprietary software. No permission is granted to use, copy, modify, distribute, sublicense, sell, host, or create derivative works from any part of the software without prior written permission from the copyright holder.
+Copyright 2026 Private Cinema contributors.
 
-Authorized users may access and use the software only for purposes expressly permitted by the copyright holder.
+本项目原创网站代码、原生音轨工具封装代码、测试及文档，按根目录
+[Apache License 2.0](LICENSE) 授权。原先的专有软件限制不适用于本开源发行包。
 
-Third-party components remain subject to their respective licenses.
+你可以免费使用、修改、部署、再分发以及商用；再分发时应遵守 LICENSE，
+保留适用版权及 NOTICE，说明修改。站名及默认昵称可以更改，不要求在首页
+保留原作者个人姓名，但不能删除再分发所需的许可证及归属文件。
+
+“Private Cinema contributors” 是去个人化的项目集体署名，不改变实际权利归属。
+只有权利人或获授权者能授予许可；贡献者须确认有权提交。第三方代码、媒体、
+编解码器专利、云服务、字体及商标不因本项目开源而自动获得授权。
+
+Apache-2.0 的专利授权仅覆盖贡献者可授权且满足许可证定义的专利权利要求，
+不是对所有媒体编解码专利的兜底许可。免责声明也不能排除法律规定不得排除的责任。

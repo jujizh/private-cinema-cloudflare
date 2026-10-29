@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Private Cinema contributors.
+// Open-source snapshot prepared 2026-10-29; see CHANGELOG.md.
 // Control/signalling only. This controller never owns or closes media tracks.
-export const JOIN_RELEASE = "2.3.11-caption-sync-20261029";
+export const JOIN_RELEASE = "2.4.0-open-source-20261029";
 
 const terminalCodes = new Set([
   "join_cancelled", "room_ended", "room_expired", "invite_invalid", "invite_required",

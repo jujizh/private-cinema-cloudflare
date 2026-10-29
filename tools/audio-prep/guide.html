@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>本地音轨准备教程</title>
+<body style="max-width:850px;margin:40px auto;padding:0 20px;font:17px/1.8 system-ui;color:#20212a">
+<h1>只生成音轨，不复制电影</h1>
+<p>此程序的原创封装代码按 Apache-2.0 开源，不附带 FFmpeg，不上传文件，也不绕过 DRM。</p>
+<ol><li>从 FFmpeg 官方下载入口选择可信的 Windows 构建，解压。</li>
+<li>运行 AudioPrep，在“设置 FFmpeg”选择同时包含 ffmpeg.exe 与 ffprobe.exe 的 bin 文件夹。</li>
+<li>选择你有权使用的本地原片，选正确语言音轨，保持输出扩展名 .m4a，点击生成。</li>
+<li>完成后打开网站的本地播放器，先选原视频，再点“加载本地音轨”选 M4A，试听。</li>
+<li>回到房间使用“共享本地播放器”，选择该 Chrome 标签页，并勾选共享标签页音频。</li>
+<li>字幕在房间上传，每个人自行选语言；本地播放器暂停和跳转会同步房间字幕时钟。</li></ol>
+<h2>注意事项</h2><p>原片不覆盖；默认 AAC 192 kbps 立体声，约 86.4 MB/小时。
+转换速度依机器及文件而异，不能保证瞬时完成。音频转换不能解决视频本身不支持的编码。
+若音画不同步，核对音轨是否与原片同一集、同一剪辑版本。错误日志可能含本地路径，公开前先脱敏。</p>
+<p>无声也可能来自静音、自动播放限制或未共享音频，不能一律归因为版权。
+本工具不授予影片、字幕或编解码器专利权利。请同时阅读随包 LICENSE、NOTICE、DISCLAIMER.md 和 THIRD_PARTY_NOTICES.md。</p>
+<p><a href="https://ffmpeg.org/download.html">FFmpeg 官方下载入口</a> · <a href="https://ffmpeg.org/legal.html">FFmpeg 许可说明</a></p>
+</body></html>

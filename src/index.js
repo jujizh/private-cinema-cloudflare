@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Private Cinema contributors.
+// Open-source snapshot prepared 2026-10-29; see CHANGELOG.md.
 import {
   base64UrlEncode,
   constantTimeEqual,
@@ -128,8 +131,8 @@ async function routeApi(request, env) {
 
   if (url.pathname === "/api/config" && request.method === "GET") {
     return jsonResponse({
-      version: "2.3.11",
-      release: "2.3.11-caption-sync-20261029",
+      version: "2.4.0",
+      release: "2.4.0-open-source-20261029",
       realtimeConfigured: realtimeConfigured(env),
       turnConfigured: Boolean(env.TURN_KEY_ID && env.TURN_KEY_API_TOKEN),
       ownerConfigured: Boolean(env.ADMIN_PASSWORD && env.APP_AUTH_SECRET?.length >= 32),

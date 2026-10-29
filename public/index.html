@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#07080b">
   <meta name="color-scheme" content="dark">
-  <title>Jiahao Private Cinema</title>
+  <title>Private Cinema</title>
   <meta name="description" content="An invitation-only private cinema for watching together across the world.">
-  <meta name="cinema-release" content="2.3.11-caption-sync-20261029">
-  <link rel="stylesheet" href="/styles.css?v=2.3.11-caption-sync-20261029">
-  <script type="module" src="/app.js?v=2.3.11-caption-sync-20261029"></script>
+  <meta name="cinema-release" content="2.4.0-open-source-20261029">
+  <link rel="stylesheet" href="/styles.css?v=2.4.0-open-source-20261029">
+  <script type="module" src="/app.js?v=2.4.0-open-source-20261029"></script>
 </head>
 <body>
   <div class="grain" aria-hidden="true"></div>
@@ -17,11 +17,11 @@
   <div class="aurora aurora-two" aria-hidden="true"></div>
 
   <header class="topbar">
-    <a class="brand" href="/" aria-label="Jiahao Private Cinema home">
+    <a class="brand" href="/" aria-label="Private Cinema home">
       <span class="brand-mark" aria-hidden="true"><span></span></span>
       <span>
-        <strong>Jiahao Private Cinema</strong>
-        <small>One screen. Any distance.</small>
+        <strong data-site-text="title">Private Cinema</strong>
+        <small data-site-text="tagline">One screen. Any distance.</small>
       </span>
     </a>
     <div class="connection-pill" id="connectionPill">
@@ -33,9 +33,9 @@
   <main>
     <section id="entryView" class="entry-view">
       <div class="entry-copy">
-        <p class="eyebrow">INVITATION ONLY · LIVE ON CLOUDFLARE</p>
-        <h1>Your private<br><em>screening room.</em></h1>
-        <p class="lead">Share one screen with the people you choose. No public room list, no media uploads, no strangers wandering in.</p>
+        <p class="eyebrow" data-site-text="eyebrow">INVITATION ONLY · WATCH TOGETHER</p>
+        <h1><span data-site-text="heroTitle">Your private</span><br><em data-site-text="heroAccent">screening room.</em></h1>
+        <p class="lead" data-site-text="introduction">Share one screen with the people you choose. No public room list, no movie file uploads, no strangers wandering in.</p>
         <div class="feature-row" aria-label="Key features">
           <span>Global SFU</span><i></i><span>Adaptive quality</span><i></i><span>Private invites</span>
         </div>
@@ -47,14 +47,14 @@
         <h2 id="inviteHeading">The room is waiting</h2>
         <p id="inviteRoleText" class="muted">Enter a name your friends will recognize.</p>
         <label class="field-label" for="guestName">Your name</label>
-        <input id="guestName" maxlength="40" autocomplete="nickname" placeholder="e.g. Sana">
+        <input id="guestName" maxlength="40" autocomplete="nickname" placeholder="e.g. Guest">
         <button id="enterRoomButton" class="button button-primary button-wide">Enter the cinema <span>→</span></button>
         <p id="inviteError" class="form-error" role="alert"></p>
         <p id="joinStatus" class="muted compact" role="status" aria-live="polite"></p>
         <details class="connection-help">
-          <summary>Connection help / 连接诊断 · v2.3.9</summary>
+          <summary>Connection help / 连接诊断 · v2.4.0</summary>
           <p class="muted compact">If joining fails, copy this report to your host. No invitation links, tickets, names or chat are included.</p>
-          <pre id="joinDiagnosticText">2.3.11-caption-sync-20261029 · Ready to join</pre>
+          <pre id="joinDiagnosticText">2.4.0-open-source-20261029 · Ready to join</pre>
           <button type="button" class="button button-soft button-wide" data-copy-connection>Copy connection diagnostics / 复制连接诊断</button>
         </details>
       </section>
@@ -248,7 +248,7 @@
           <section class="panel host-tools host-only">
             <div class="section-title"><span>Host tools</span><span>◆</span></div>
             <div class="stack tight">
-              <input id="inviteLabel" maxlength="60" placeholder="Invite label, e.g. Sana">
+              <input id="inviteLabel" maxlength="60" placeholder="Invite label, e.g. Guest">
               <div class="split-fields">
                 <select id="inviteRole"><option value="viewer">Viewer</option><option value="host">Guest host</option></select>
                 <select id="inviteHours"><option value="6">6 hours</option><option value="24" selected>24 hours</option><option value="72">3 days</option><option value="168">7 days</option></select>
