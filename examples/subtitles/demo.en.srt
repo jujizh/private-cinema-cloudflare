@@ -1,0 +1,11 @@
+1
+00:00:00,000 --> 00:00:03,000
+Welcome to the private screening.
+
+2
+00:00:03,200 --> 00:00:06,000
+Choose a language on your own screen.
+
+3
+00:00:06,200 --> 00:00:10,000
+Pause or seek to test subtitle timing.

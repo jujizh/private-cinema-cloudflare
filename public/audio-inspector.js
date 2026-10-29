@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Private Cinema contributors.
+// Open-source snapshot prepared 2026-10-29; see CHANGELOG.md.
 // Read container metadata only: no decoding, transcoding, upload or full-file copy.
 // Matroska IDs follow https://www.matroska.org/technical/elements.html.
 const IDS = { ebml: 0x1a45dfa3, segment: 0x18538067, seekHead: 0x114d9b74,

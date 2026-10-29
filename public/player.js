@@ -1,6 +1,13 @@
-import { disableEmbeddedTextTracks, formatMovieTime } from "./local-media.js?v=2.3.11-caption-sync-20261029";
-import { inspectAudioFile, audioAdvice } from "./audio-inspector.js?v=2.3.11-caption-sync-20261029";
-import { ExternalAudio } from "./external-audio.js?v=2.3.11-caption-sync-20261029";
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Private Cinema contributors.
+// Open-source snapshot prepared 2026-10-29; see CHANGELOG.md.
+import { disableEmbeddedTextTracks, formatMovieTime } from "./local-media.js?v=2.4.1-host-settings-20261029";
+import { inspectAudioFile, audioAdvice } from "./audio-inspector.js?v=2.4.1-host-settings-20261029";
+import { ExternalAudio } from "./external-audio.js?v=2.4.1-host-settings-20261029";
+import { siteConfig, loadSiteSettings } from "./site-config.js?v=2.4.1-host-settings-20261029";
+
+document.title = `${siteConfig.localPlayerTitle} — ${siteConfig.title}`;
+loadSiteSettings().then(() => { document.title = `${siteConfig.localPlayerTitle} — ${movieName || siteConfig.title}`; });
 
 const params = new URLSearchParams(location.search);
 const channelId = params.get("channel") || "";
@@ -95,7 +102,7 @@ picker.addEventListener("change", () => {
   waiting = true;
   failure.hidden = true;
   fileLabel.textContent = movieName;
-  document.title = `Local movie / 本地电影 — ${movieName}`;
+  document.title = `${siteConfig.localPlayerTitle} — ${movieName} — ${siteConfig.title}`;
   empty.hidden = true;
   movie.hidden = false;
   movie.src = objectUrl;

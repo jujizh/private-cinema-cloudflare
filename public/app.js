@@ -1,5 +1,9 @@
-import { RoomConnection, JOIN_RELEASE } from "./room-connection.js?v=2.3.11-caption-sync-20261029";
-import { normaliseLocalState, localMovieClock, localCaptureDecision, formatMovieTime } from "./local-media.js?v=2.3.11-caption-sync-20261029";
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Private Cinema contributors.
+// Open-source snapshot prepared 2026-10-29; see CHANGELOG.md.
+import { RoomConnection, JOIN_RELEASE } from "./room-connection.js?v=2.4.1-host-settings-20261029";
+import { siteConfig, applySiteConfig, loadSiteSettings, useSiteSettings, siteSettingsConfigured, siteSettingsLoadSucceeded } from "./site-config.js?v=2.4.1-host-settings-20261029";
+import { normaliseLocalState, localMovieClock, localCaptureDecision, formatMovieTime } from "./local-media.js?v=2.4.1-host-settings-20261029";
 
 const $ = (id) => document.getElementById(id);
 // Small private rooms prefer direct media because it has performed better than
@@ -26,6 +30,7 @@ const ui = Object.fromEntries([
   "connectionPill", "connectionText", "entryView", "inviteEntry", "ownerEntry", "ownerDashboard", "closedEntry",
   "closedMessage", "guestName", "enterRoomButton", "inviteRoleText", "inviteError", "ownerLoginForm", "ownerPassword",
   "ownerError", "createRoomForm", "roomTitle", "roomHours", "dashboardError", "logoutButton", "recentRooms",
+  "siteSettingsPanel", "siteSettingsForm", "siteSettingsStatus", "resetSiteSettings", "saveSiteSettings",
   "refreshRooms", "cinemaView", "cinemaTitle", "copyGuestLink", "lockRoom", "leaveRoom", "stage", "remoteVideo",
   "directVideo", "previewVideo", "stageEmpty", "stageKicker", "stageTitle", "stageHint", "liveBadge", "reactionLayer", "startShare",
   "stopShare", "openMovie", "qualitySelect", "pictureInPicture", "fullscreenButton", "shareTip",
@@ -753,6 +758,8 @@ function showClosed(message) {
 }
 
 async function initialize() {
+  await loadSiteSettings();
+  applySiteConfig();
   bindEvents();
   const params = new URLSearchParams(location.search);
   const incoming = params.get("invite");
@@ -793,7 +800,7 @@ async function initializeOwner() {
     }
     if (!config.realtimeConfigured) toast("Realtime SFU still needs to be configured");
     setVisible(session.authenticated ? ui.ownerDashboard : ui.ownerEntry, true);
-    if (session.authenticated) await loadRecentRooms();
+    if (session.authenticated) { fillSiteSettingsForm(); await loadRecentRooms(); }
   } catch (error) {
     showClosed(error.message);
   }
@@ -807,6 +814,7 @@ async function ownerLogin(event) {
     ui.ownerPassword.value = "";
     setVisible(ui.ownerEntry, false);
     setVisible(ui.ownerDashboard, true);
+    fillSiteSettingsForm();
     await loadRecentRooms();
   } catch (error) {
     ui.ownerError.textContent = error.message;
@@ -816,6 +824,44 @@ async function ownerLogin(event) {
 async function ownerLogout() {
   await api("/api/admin/logout", { method: "POST" });
   location.reload();
+}
+
+function fillSiteSettingsForm() {
+  for (const input of ui.siteSettingsForm.querySelectorAll('[data-setting]')) input.value = siteConfig[input.dataset.setting] || '';
+  ui.siteSettingsPanel.open = !siteSettingsConfigured;
+  ui.saveSiteSettings.disabled = ui.resetSiteSettings.disabled = !siteSettingsLoadSucceeded;
+  if (!siteSettingsLoadSucceeded) {
+    ui.siteSettingsStatus.textContent = '读取服务器设置失败。请刷新页面后重试；为避免覆盖原设置，暂不允许保存。';
+    return;
+  }
+  ui.siteSettingsStatus.textContent = siteSettingsConfigured
+    ? '已使用服务器保存的站点设置。' : '首次部署？先设置站名与默认昵称，也可直接保留默认值。';
+}
+
+async function saveSiteSettings(event) {
+  event.preventDefault();
+  if (!siteSettingsLoadSucceeded) return;
+  ui.saveSiteSettings.disabled = ui.resetSiteSettings.disabled = true;
+  ui.siteSettingsStatus.textContent = '正在保存…';
+  try {
+    const settings = Object.fromEntries([...ui.siteSettingsForm.querySelectorAll('[data-setting]')].map(input => [input.dataset.setting, input.value]));
+    const result = await api('/api/admin/site-settings', { method: 'PUT', body: JSON.stringify(settings) });
+    useSiteSettings(result.settings, result.configured);
+    applySiteConfig();
+    ui.siteSettingsStatus.textContent = '已保存并应用。其他已打开的页面刷新后生效，无需重新部署。';
+  } catch (error) { ui.siteSettingsStatus.textContent = `保存失败：${error.message}。修改内容已保留，请重试。`; }
+  finally { ui.saveSiteSettings.disabled = ui.resetSiteSettings.disabled = false; }
+}
+
+async function resetSiteSettings() {
+  if (!confirm('恢复站点默认文字？不会删除房间、字幕或云端密钥。')) return;
+  ui.saveSiteSettings.disabled = ui.resetSiteSettings.disabled = true;
+  try {
+    const result = await api('/api/admin/site-settings', { method: 'DELETE' });
+    useSiteSettings(result.settings, result.configured); applySiteConfig(); fillSiteSettingsForm();
+    ui.siteSettingsStatus.textContent = '已恢复默认文字。其他页面刷新后生效。';
+  } catch (error) { ui.siteSettingsStatus.textContent = `恢复失败：${error.message}`; }
+  finally { ui.saveSiteSettings.disabled = ui.resetSiteSettings.disabled = false; }
 }
 
 async function loadRecentRooms() {
@@ -886,7 +932,7 @@ async function createRoom(event) {
     });
     state.defaultGuestToken = result.viewer.token;
     storeInvite(result.host.token);
-    state.name = localStorage.getItem("cinema.ownerName") || "Jiahao";
+    state.name = siteConfig.defaultHostName;
     await connectToRoom();
   } catch (error) {
     ui.dashboardError.textContent = error.message;
@@ -903,7 +949,7 @@ async function resumeRoom(roomId) {
       body: JSON.stringify({ role: "host", label: "Owner", expiresInHours: 24 }),
     });
     storeInvite(result.invite.token);
-    state.name = localStorage.getItem("cinema.ownerName") || "Jiahao";
+    state.name = siteConfig.defaultHostName;
     await connectToRoom();
   } catch (error) {
     ui.dashboardError.textContent = error.message;
@@ -2897,6 +2943,8 @@ function bindEvents() {
     setBusy(false);
   });
   ui.ownerLoginForm.addEventListener("submit", ownerLogin);
+  ui.siteSettingsForm.addEventListener("submit", saveSiteSettings);
+  ui.resetSiteSettings.addEventListener("click", resetSiteSettings);
   ui.createRoomForm.addEventListener("submit", createRoom);
   ui.logoutButton.addEventListener("click", ownerLogout);
   ui.refreshRooms.addEventListener("click", loadRecentRooms);
@@ -2975,4 +3023,5 @@ function bindEvents() {
   });
 }
 
+applySiteConfig();
 initialize();

@@ -1,15 +1,21 @@
 {
-  "name": "jiahao-private-cinema-cloudflare",
-  "version": "2.3.11",
+  "name": "private-cinema",
+  "version": "2.4.1",
   "private": true,
+  "license": "Apache-2.0",
+  "engines": { "node": ">=22" },
   "type": "module",
   "description": "Invitation-only private cinema on Cloudflare Workers, Durable Objects and Realtime SFU",
   "scripts": {
-    "check": "node --check src/index.js && node --check src/room.js && node --check src/security.js && node --check src/sfu.js && node --check src/directory.js && node --check public/app.js && node --check public/player.js && node --check public/local-media.js && node --check public/external-audio.js && node --check public/audio-inspector.js && node --check public/room-connection.js && node --test test/*.test.js",
+    "check": "node --check src/index.js && node --check src/room.js && node --check src/security.js && node --check src/sfu.js && node --check src/directory.js && node --check public/app.js && node --check public/site-config.js && node --check public/site-settings.js && node --check public/player.js && node --check public/local-media.js && node --check public/external-audio.js && node --check public/audio-inspector.js && node --check public/room-connection.js && node --test test/*.test.js",
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "check:public": "node scripts/check-public.mjs",
+    "test:browser": "node scripts/test-local-player.cjs"
   },
   "devDependencies": {
-    "wrangler": "^4.35.0"
+    "wrangler": "4.155.0",
+    "playwright": "1.62.1",
+    "ws": "8.22.0"
   }
 }

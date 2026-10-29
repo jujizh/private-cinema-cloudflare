@@ -1,4 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Private Cinema contributors.
+// Open-source snapshot prepared 2026-10-29; see CHANGELOG.md.
 import { jsonResponse, readJson, safeText } from "./security.js";
+import { validateSiteSettings } from "../public/site-settings.js";
 
 export class CinemaDirectory {
   constructor(ctx) {
@@ -7,6 +11,26 @@ export class CinemaDirectory {
 
   async fetch(request) {
     const url = new URL(request.url);
+    // Reuse the existing singleton, but never mix branding into room records.
+    // This object is not public: admin authorization is enforced by the Worker.
+    if (url.pathname === "/site-settings") {
+      if (request.method === "GET") {
+        const settings = (await this.ctx.storage.get("siteSettings")) || {};
+        return jsonResponse({ settings, configured: Object.keys(settings).length > 0 });
+      }
+      if (request.method === "PUT") {
+        let settings;
+        try { settings = validateSiteSettings(await readJson(request, 12 * 1024)); }
+        catch (error) { return jsonResponse({ error: error.message }, { status: 400 }); }
+        await this.ctx.storage.put("siteSettings", settings);
+        return jsonResponse({ settings, configured: Object.keys(settings).length > 0 });
+      }
+      if (request.method === "DELETE") {
+        await this.ctx.storage.delete("siteSettings");
+        return jsonResponse({ settings: {}, configured: false });
+      }
+      return jsonResponse({ error: "Method not allowed" }, { status: 405 });
+    }
     const rooms = (await this.ctx.storage.get("rooms")) || {};
 
     if (request.method === "GET") {

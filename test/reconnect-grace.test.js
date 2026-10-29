@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Private Cinema contributors.
+// Open-source snapshot prepared 2026-10-29; see CHANGELOG.md.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CinemaRoom } from "../src/room.js";
@@ -75,42 +78,42 @@ test("subtitle clock budget accepts four updates per second and the final paused
 test("temporary viewer control loss is held in presence until the grace expires", async () => {
   const { cinema, messages } = fixture();
   await cinema.ready;
-  const anna = fakeSocket({
-    id: "anna-id",
-    clientId: "anna-client",
+  const viewerFixture = fakeSocket({
+    id: "viewerFixture-id",
+    clientId: "viewerFixture-client",
     role: "viewer",
-    name: "Anna",
+    name: "Viewer",
     joinedAt: Date.now() - 10_000,
     quality: { state: "good" },
   });
 
-  await cinema.webSocketClose(anna, 1006, "Network changed");
+  await cinema.webSocketClose(viewerFixture, 1006, "Network changed");
 
-  assert.ok(cinema.room.participantDisconnects["anna-client"]);
+  assert.ok(cinema.room.participantDisconnects["viewerFixture-client"]);
   assert.equal(messages.some((message) => message.type === "peer:left"), false);
   const presence = messages.findLast((message) => message.type === "room:presence");
-  const pendingAnna = presence.participants.find((participant) => participant.id === "anna-id");
-  assert.equal(pendingAnna.reconnecting, true);
+  const pendingViewer = presence.participants.find((participant) => participant.id === "viewerFixture-id");
+  assert.equal(pendingViewer.reconnecting, true);
 
-  cinema.room.participantDisconnects["anna-client"].deadline = Date.now() - 1;
+  cinema.room.participantDisconnects["viewerFixture-client"].deadline = Date.now() - 1;
   await cinema.alarm();
-  assert.equal(messages.some((message) => message.type === "peer:left" && message.peer.id === "anna-id"), true);
+  assert.equal(messages.some((message) => message.type === "peer:left" && message.peer.id === "viewerFixture-id"), true);
 });
 
 test("explicit Leave bypasses the reconnect grace", async () => {
   const { cinema, messages } = fixture();
   await cinema.ready;
-  const anna = fakeSocket({
-    id: "anna-id",
-    clientId: "anna-client",
+  const viewerFixture = fakeSocket({
+    id: "viewerFixture-id",
+    clientId: "viewerFixture-client",
     role: "viewer",
-    name: "Anna",
+    name: "Viewer",
     joinedAt: Date.now(),
     quality: null,
   });
 
-  await cinema.webSocketClose(anna, 1000, "Left room");
+  await cinema.webSocketClose(viewerFixture, 1000, "Left room");
 
-  assert.equal(cinema.room.participantDisconnects["anna-client"], undefined);
-  assert.equal(messages.some((message) => message.type === "peer:left" && message.peer.id === "anna-id"), true);
+  assert.equal(cinema.room.participantDisconnects["viewerFixture-client"], undefined);
+  assert.equal(messages.some((message) => message.type === "peer:left" && message.peer.id === "viewerFixture-id"), true);
 });

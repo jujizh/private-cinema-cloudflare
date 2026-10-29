@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Private Cinema contributors.
+// Open-source snapshot prepared 2026-10-29; see CHANGELOG.md.
 // Local sidecar audio. No server upload and no extra screen-capture pipeline.
 export class ExternalAudio {
   constructor(video, audio, notify, url = URL) {

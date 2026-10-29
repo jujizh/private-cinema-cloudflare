@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Private Cinema contributors.
+// Open-source snapshot prepared 2026-10-29; see CHANGELOG.md.
 import {
   base64UrlEncode,
   constantTimeEqual,
@@ -126,10 +129,22 @@ async function routeApi(request, env) {
   const url = new URL(request.url);
   ensureSameOrigin(request);
 
+  if (url.pathname === "/api/site-settings" && request.method === "GET") {
+    return directoryStub(env).fetch("https://directory/site-settings");
+  }
+  if (url.pathname === "/api/admin/site-settings") {
+    await requireAdmin(request, env);
+    if (!["GET", "PUT", "DELETE"].includes(request.method)) throw new HttpError(405, "Method not allowed", "method_not_allowed");
+    const body = request.method === "PUT" ? JSON.stringify(await readJson(request, 12 * 1024)) : undefined;
+    return directoryStub(env).fetch("https://directory/site-settings", {
+      method: request.method, headers: { "Content-Type": "application/json" }, body,
+    });
+  }
+
   if (url.pathname === "/api/config" && request.method === "GET") {
     return jsonResponse({
-      version: "2.3.11",
-      release: "2.3.11-caption-sync-20261029",
+      version: "2.4.1",
+      release: "2.4.1-host-settings-20261029",
       realtimeConfigured: realtimeConfigured(env),
       turnConfigured: Boolean(env.TURN_KEY_ID && env.TURN_KEY_API_TOKEN),
       ownerConfigured: Boolean(env.ADMIN_PASSWORD && env.APP_AUTH_SECRET?.length >= 32),

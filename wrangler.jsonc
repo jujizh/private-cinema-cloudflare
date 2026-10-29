@@ -1,14 +1,10 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "jujizh-jiahao-private-cinema-cloudflare",
-  "account_id": "6cb8f329c1bcbc5ea713c39a448e9db4",
-  "workers_dev": true,
-  "preview_urls": true,
-  "routes": [
-    { "pattern": "cinema.mofangnet.eu.org", "custom_domain": true }
-  ],
+  "name": "private-cinema",
   "main": "src/index.js",
   "compatibility_date": "2026-09-08",
+  "workers_dev": true,
+  "preview_urls": false,
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
@@ -16,31 +12,14 @@
   },
   "durable_objects": {
     "bindings": [
-      {
-        "name": "ROOMS",
-        "class_name": "CinemaRoom"
-      },
-      {
-        "name": "DIRECTORY",
-        "class_name": "CinemaDirectory"
-      },
-      {
-        "name": "AUTH_LIMITER",
-        "class_name": "AuthRateLimiter"
-      }
+      { "name": "ROOMS", "class_name": "CinemaRoom" },
+      { "name": "DIRECTORY", "class_name": "CinemaDirectory" },
+      { "name": "AUTH_LIMITER", "class_name": "AuthRateLimiter" }
     ]
   },
   "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": ["CinemaRoom"]
-    },
-    {
-      "tag": "v2",
-      "new_sqlite_classes": ["CinemaDirectory", "AuthRateLimiter"]
-    }
+    { "tag": "v1", "new_sqlite_classes": ["CinemaRoom"] },
+    { "tag": "v2", "new_sqlite_classes": ["CinemaDirectory", "AuthRateLimiter"] }
   ],
-  "observability": {
-    "enabled": true
-  }
+  "observability": { "enabled": false }
 }

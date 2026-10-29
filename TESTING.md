@@ -1,190 +1,67 @@
-# Release checklist
+# 验证记录及边界
 
-## v2.3.11 caption-sync scope
+发行标识：`2.4.1-host-settings-20261029`。日期：2026-10-29。
+2.4.1 在开源快照上新增管理员站点设置，仅本地交付，没有推送 GitHub、合并或部署。
 
-67 automated checks passed. Real Chrome local integration tested a synthetic
-video plus sidecar audio: seek before sharing, explicit source confirmation,
-clock snapshot, room play/pause/seek/rate, final paused seek after an event burst,
-independent English/Russian captions and mobile overflow. The fixture simulates
-the selected capture track and uses local WebSockets, not production WebRTC.
+## 2.4.1 新增验证
 
-Manual acceptance after deployment: refresh both endpoints and reopen the local
-player, load matching video/audio/subtitle versions, seek to the middle BEFORE
-sharing, then use Share local player and enable tab audio. Check cue alignment
-on both endpoints, then pause, resume and seek forward/back. Verify the release
-ID is `2.3.11-caption-sync-20261029`. Test real network/video buffering separately;
-this change does not guarantee frame-exact subtitles during receiver freezes.
+- **74 项** Node 自动测试及语法检查通过，新增管理员/邀请角色隔离、同源校验、
+  字段白名单、超长/非法输入、持久化重建、恢复默认不删除房间等用例。
+- Chrome 本地集成覆盖 Host 登录、首次自动展开、保存及刷新保持、新浏览器读取、
+  播放器页签品牌、保存失败保留输入、恢复默认、移动端表单及长站名不横向溢出。
+- 同时重跑原有本地视频、外置音轨、字幕及路由状态夹具；媒体网络策略没有更改。
+- Wrangler dry-run 通过；复用现有 Directory 绑定，不改迁移或签名标识。
 
-## v2.3.8 local-player scope
+以下为 2.4.0 的历史验证记录，音轨工具本次未修改，未重复宣称运行其完整转码测试。
 
-`npm run check` covers 57 checks, including local source validation, playback
-clock rate/pause/buffering, heartbeat expiry, disabled embedded text tracks and
-the previous join/security/route regressions. See RELEASE-VERIFICATION.md for
-real-browser integration results and explicit exclusions.
+## 本次完成的检查
 
-Manual production acceptance:
-1. Refresh both endpoints after verifying the release ID. Open a supported local
-   movie from the room link; the tab must open before any file is chosen.
-2. Choose the file inside that player. Return to the room and click Share local
-   player; select its Chrome Tab and enable audio, not Window/Entire Screen.
-3. Check actual sound on the viewer, captured FPS and decoded FPS over 30+ min.
-4. Upload matching English/Russian SRT/VTT; choose a different language at each
-   endpoint. Pause, resume and seek via room controls and native source controls.
-5. Close the source tab. Controls must disable immediately if the close message
-   arrives, or within approximately 11 seconds on heartbeat expiry.
-6. Try an unsupported file: the player must show a decode/format error, not the
-   old popup-permission message. Do not claim every MKV can play.
-7. Repeat after a temporary control-network loss; media routing must retain the
-   v2.3.7 join-fix behavior. A browser/headless fixture cannot prove this on Anna's network.
+- Node.js 语法及 **69 项自动测试**通过：签名/邀请、安全边界、入房生命周期、
+  重连、路由/热备源码回归、本地媒体时钟、MKV 有界元数据、字幕、公开品牌。
+- `npm ci --ignore-scripts` 在当前 lockfile 上成功；Wrangler 4.155.0、Playwright 1.62.1、
+  ws 8.22.0 锁定。本次 `npm audit` 报告 0 个已知漏洞，不等于无安全缺陷或永久安全。
+- Wrangler `deploy --dry-run` 成功，识别三项 DO 绑定及静态资产；没有向生产发布。
+- 公开快照启发式扫描未检测到旧个性化品牌、本机用户路径或禁止发行的配置/媒体文件。
+  不扫描 Git 历史、云账号、旧仓库附件，也不是完整秘密扫描审计。
+- Windows .NET Framework 源码编译成功；用 FFmpeg 生成 4 秒黑画面/正弦波后
+  导出一条立体声 AAC，验证参数转义、输入哈希不变、已有输出拒绝覆盖。
+  没有读取真实影片；不含 FFmpeg 二进制。
+- 真实 Chrome 156.0.8078.48 本地 HTTP/WebSocket 集成：中性品牌、原生打开播放器、
+  合成 VP8/Opus 播放、外置 audio 元素、从中间开始共享、房间暂停/跳转/倍速、
+  观看端跟随源时钟、连续事件最终状态、英/俄独立字幕、禁用内嵌文本字幕、
+  错误提示、移动端不横向溢出；0 个页面错误、0 次电影文件 API 上传。
 
-## v2.3.7 join-fix regression scope
+## 浏览器测试如何复现
 
-The previous v2.3.7 `npm run check` covered 49 checks (architecture/source assertions, connection
-controller runtime tests, app integration with a simulated DOM, server reconnect
-grace, and security). These checks do not prove China–Russia reachability.
-
-After deployment, verify the release ID in `/api/config`, then test initial join,
-Cancel, manual retry after failure, and a temporary network loss/recovery with
-both endpoints. A successful initial join must include the server's `welcome`,
-not just a WebSocket `open`. Ask for the built-in connection report if it fails.
-An HTTP 403 shown in the report is an admission response, not proof of a WAF rule;
-the browser generally hides the HTTP status of a rejected WebSocket upgrade.
-
-## Original baseline checklist
-
-## Automated
-
-Run:
-
-```text
-npm install
-npm run check
-npx wrangler deploy --dry-run
+```sh
+npm ci
+npx playwright install chromium
+npm run test:browser
 ```
 
-This checks every JavaScript file, token signing and tamper rejection, expiry handling, input normalization, page/UI wiring, secret isolation, role enforcement markers, and Durable Object migration continuity.
+也可使用已安装 Chrome：Windows PowerShell 中先执行
+`$env:BROWSER_CHANNEL = 'chrome'` 再执行 `npm run test:browser`。
+测试只监听 127.0.0.1 并生成合成媒体及截图到 build-output，结束后关闭浏览器/测试服务。
+测试夹具会模拟已选中的采集轨，并在媒体建立前返回，避免调用真实 SFU/ICE 服务。
+**真实媒体元素/字幕时钟已测试，不等于真实 WebRTC 跨国媒体链路已测试。**
 
-## Browser smoke test
+Windows 工具测试：`pwsh -NoProfile -File tools/audio-prep/test.ps1`，或在允许执行自己
+已审查脚本的 Windows PowerShell 中执行；FFmpeg/ffprobe 需在 PATH。
+图形工具编译也提供 build.cmd，不要求为构建修改全局执行策略。
+不同构建机器/编译时间的 EXE 哈希未承诺相同；源码可构建并不等于位级可复现构建。
 
-Use current Chrome or Edge.
+## 明确未完成
 
-1. Open `/host`, sign in, and create a six-hour room.
-2. Open the viewer invitation in a private window with a different client identity.
-3. Verify the presence count is two and no duplicate join/leave messages appear.
-4. Start a tab share with audio and confirm video/audio arrive.
-5. Switch viewer quality among Data saver, Balanced, Best quality, and Auto.
-6. Confirm the Network panel updates every five seconds.
-7. Stop sharing and verify the viewer returns to the waiting screen.
-8. Reconnect both sides after briefly disabling Wi-Fi.
-9. Lock the room; confirm the admitted viewer reconnects but a new private-window identity is rejected.
-10. Create a second viewer invite, revoke it, and confirm its connected viewer is removed.
-11. Confirm a viewer cannot call publish or host-control endpoints.
-12. End the room and confirm all invitations stop working.
+没有真实屏幕采集选择器/标签页音频的全自动验收，没有完整电影耐久播放、
+跨国/移动网络、超额计费、万人负载、图形驱动问题、恶意用户渗透或第三方安全审计。
+CI 中自动检查不包含真实浏览器和完整音频转码测试；Windows job 只编译封装。
+已有媒体架构/编码策略没有因开源重新调参；未实现的自建媒体服务或 AI 字幕不算验证项目。
 
-## Cross-border test
+## 部署者应做的人工验收
 
-Use actual separate networks. Run a ten-minute Balanced-quality clip, then record:
-
-- Route: Cloudflare SFU or SFU via TURN
-- Transport: UDP, TCP, or TLS
-- Bitrate
-- RTT
-- Packet loss and jitter
-- Resolution and FPS
-
-Interpretation:
-
-- High packet loss: lower quality; compare Wi-Fi and mobile data.
-- Very high RTT but low loss: the route is long; TURN or a different viewer network may help.
-- Low bitrate with low loss: browser adaptation or local bandwidth/CPU is the likely constraint.
-- Good metrics but visual stutter: check hardware decoding, browser load, and whether the shared tab itself is smooth.
-
-## Mobile congestion test
-
-1. Start with both Host and viewer set to **Auto (recommended)**.
-2. On the viewer phone, disable Low Power Mode and keep the page in the foreground.
-3. Test on Wi-Fi for two minutes, then repeat on mobile data if available.
-4. A short quality drop is acceptable; sustained packet loss above 5% is not.
-5. Confirm Best quality automatically steps down instead of remaining stuck at
-   1080p when packet loss rises.
-6. Frame drops are now shown per five-second interval. A large old total should
-   no longer make a recovered connection look permanently unhealthy.
-
-## Hybrid P2P test
-
-1. Join with one viewer and begin broadcasting.
-2. The viewer should start on the SFU and then switch automatically to
-   **Direct P2P** only after ICE negotiation, a decoded frame, and a six-second
-   P2P/SFU comparison complete. Route state should report that the P2P health
-   probe passed. Keep the stream running and confirm the hidden SFU subscription
-   remains connected.
-3. Add a second and then a third viewer. Each should negotiate its own P2P or
-   P2P-via-TURN route; monitor Host CPU and upload usage while doing so.
-4. On the same Wi-Fi, expect UDP, low RTT and near-zero loss. If the panel says
-   **P2P via TURN**, inspect router client isolation or firewall rules.
-5. Temporarily block direct ICE or test through restrictive mobile networks;
-   playback must remain on/fall back to Cloudflare SFU.
-6. Add a fourth viewer. Direct routes should close and all viewers should move
-   to Cloudflare SFU so Host upload does not grow without bound.
-7. Switch one viewer between Wi-Fi and mobile data. For up to 45 seconds the
-   participant row should say **reconnecting** without emitting `left` or
-   destroying a still-healthy media path. When the control socket returns it
-   should reconnect under the same logical participant identity.
-8. Temporarily block the direct route. Video should change to SFU only after the
-   backup has a decoded frame and must not show the empty-stage placeholder.
-   The Viewer should request a hidden P2P probe after one minute, then back off
-   to three and ten minutes after measured failures. SFU must remain visible
-   throughout each probe and switch back only when P2P measures healthier.
-9. Leave the room idle for at least two minutes. The control WebSocket heartbeat
-   should prevent idle disconnects.
-10. Briefly interrupt either endpoint's control connection. Existing media and
-    screen capture should remain alive during the 45-second reconnect grace
-    period. The chat must not alternate repeated `left` and `joined` events.
-11. Repeat step 8 while recording the Viewer screen. A small timing jump is
-    possible because P2P and SFU have different latency, but a multi-second black
-    screen or repeated route flapping is a release blocker.
-12. While the Viewer is on Direct P2P, block only its P2P UDP path without
-    closing or refreshing the page. If the PeerConnection remains `connected`
-    but decoded/presented frames stop, the status should report automatic
-    recovery and move to a frame-ready SFU route.
-13. Repeat with the Viewer on SFU. A frozen-but-connected SFU subscription
-    should be replaced while the last picture remains visible. The Viewer must
-    not need to refresh, and a deliberately paused source should not repeatedly
-    switch routes.
-14. Create loss on both routes, with SFU worse than P2P. Even after the P2P loss
-    threshold is reached, the Viewer must keep P2P. Then make SFU clearly better
-    and confirm the switch occurs only after its first frame is visible.
-15. Disconnect the Viewer control WebSocket when a P2P retry becomes due. The
-    visible SFU media must continue. After control reconnects, the Viewer should
-    request another background probe without a page refresh.
-
-## Room Caption Library test
-
-1. As Host, choose **Add room subtitles** and select English `.srt` and Russian
-   `.vtt` files together.
-2. Confirm both tracks appear on every connected endpoint without a refresh.
-3. Choose English on one device and Russian on another. Confirm each selection
-   and offset remain independent.
-4. As Host, remove one selected track. Confirm it disappears everywhere.
-5. Confirm a Viewer cannot POST or DELETE Room Caption Library entries.
-6. Use −1s/+1s until dialogue aligns with the captured movie.
-7. Enter fullscreen and confirm captions remain above the video.
-8. Open a supported local MP4/WebM with **Open local video**, share the new
-   player tab, then pause and seek. Confirm every endpoint's selected subtitle
-   follows automatically.
-9. Share an external Tencent/streaming tab. Confirm **Pause subtitles** and
-   **Resume subtitles** freeze and resume every endpoint's caption clock. A
-   cross-origin service does not expose its private playback state to this app.
-10. Change subtitle size independently on desktop and mobile. Confirm the
-   default Smaller setting remains readable without covering the picture.
-
-## Capture-source throttling test
-
-1. Share a 24/30 fps movie tab and keep it inside the same window as several
-   foreground tabs. Move away from the movie tab and observe diagnostics for at
-   least 20 seconds.
-2. If capture source remains 24/30 fps while encoded output falls to 20 fps or
-   below without packet loss, confirm the source warning becomes highlighted.
-3. Move the movie tab to a dedicated browser window and leave the window
-   visible. Confirm output recovers to at least 23 fps and the highlight clears
-   after two healthy samples.
+1. 用自己的测试 Worker、六项 secrets，核对 /api/config release。
+2. 从中间开始、暂停、恢复、前后跳转，核对源页声音、对端声音和每种字幕。
+3. 远端和手机至少 30–60 分钟，记录活动路由、丢包、采集/编码/解码帧率。
+4. 测试短时信令断开、源页关闭、邀请过期、撤销及房间删除。
+5. 观影前后看云端实际用量，校准 COSTS.md 估算；账期和应用筛选应一致。
+6. 更新后双方刷新并重开源页；旧个性化版本的邀请签名不兼容，重新创建。

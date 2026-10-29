@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Private Cinema contributors.
+// Open-source snapshot prepared 2026-10-29; see CHANGELOG.md.
 // Intentionally replaces the retired v2.3.7 test file of the same name when
 // users upload over an existing repository. These tests target the join-fix
 // release, not the discarded on-demand SFU implementation.
@@ -16,7 +19,7 @@ class Socket extends EventTarget {
   }
   open() { this.readyState = 1; this.dispatchEvent(new Event("open")); }
   message(data) { this.dispatchEvent(Object.assign(new Event("message"), { data: JSON.stringify(data) })); }
-  welcome(room = "room-test") { this.message({ type: "welcome", id: "anna", role: "viewer", room: { id: room, title: "Test" }, participants: [], media: null }); }
+  welcome(room = "room-test") { this.message({ type: "welcome", id: "viewerFixture", role: "viewer", room: { id: room, title: "Test" }, participants: [], media: null }); }
   serverClose(code = 1006, reason = "") { this.readyState = 3; this.dispatchEvent(Object.assign(new Event("close"), { code, reason })); }
   close(code, reason) { this.closed.push({ code, reason }); this.serverClose(code, reason); }
 }
@@ -218,7 +221,7 @@ test("diagnostics are bounded and omit tokens, URLs and upstream exception text"
   assert.equal(f.connector.events.length, 100);
   assert.equal(json.includes("secret-"), false);
   assert.equal(json.includes("room-test"), false);
-  assert.equal(json.includes("anna"), false);
+  assert.equal(json.includes("viewerFixture"), false);
 });
 
 test("page boots with the join controls, and control recovery does not touch media", async (t) => {
@@ -237,7 +240,7 @@ test("page boots with the join controls, and control recovery does not touch med
     setTimeout, clearTimeout, setInterval, clearInterval, performance,
   });
   const source = readFileSync(new URL("../public/app.js", import.meta.url), "utf8")
-    .replace(/^import[^\n]+\n/gm, "").replace(/\ninitialize\(\);\s*$/, "");
+    .replace(/^import[^\n]+\n/gm, "").replace(/\napplySiteConfig\(\);\ninitialize\(\);\s*$/, "");
   vm.runInContext(source + "\nbindEvents();globalThis.app={state,roomConnection,connectToRoom,handleSocketClose};", context);
   const { state, roomConnection, connectToRoom } = context.app;
   roomConnection.maxAttempts = 1;

@@ -1,372 +1,117 @@
-# Jiahao Private Cinema v2.3.11 — Caption Sync
+# Private Cinema · 私人影院
 
-See [UPGRADE-2.3.11.md](UPGRADE-2.3.11.md) for the Chinese upgrade and test guide.
-Starting a local movie from the middle now requests a fresh source-clock snapshot.
-When the browser cannot identify a selected tab, the host can explicitly confirm
-the local-player time source instead of silently starting room subtitles at zero.
-Subtitle event bursts are coalesced, preserving the final pause/seek state, and
-server echoes cannot overwrite the local host's authoritative player clock.
-The external-audio workflow and P2P/SFU routing are otherwise retained.
-This release is delivered as source only; it has not been deployed.
+可自行部署的邀请制一起看电影工具。网站、切路与诊断逻辑、房间字幕库、
+本地音轨兼容工具及部署文档全部开源，采用 [Apache-2.0](LICENSE)。
+允许修改、部署及商用，须遵守许可并自行处理内容授权、隐私及云账单。
 
-## External audio (retained from v2.3.10)
+**发行版本：2.4.1 / `2.4.1-host-settings-20261029`。**
+部署成功后，进入 `/host` 登录，在“站点设置”修改站名、标语、默认主持人昵称等。
+设置保存在现有 Directory Durable Object，保存后立即应用于当前页面，其他页面刷新生效。
+无需改源码或重新部署；密码、密钥、域名和 Worker 名称不在这个面板中设置。
+升级步骤见 [2.4.1 更新说明](docs/UPGRADE-2.4.1.md)。
+以此前 2.3.11 功能为基础去个人化，并补充可配置品牌、源码构建及公开文档。
+这不是跨国网络稳定性的保证，也不是 Cloudflare 官方产品。
 
-See UPGRADE-2.3.10.md. Host can load a local M4A beside the original movie.
-The player follows video pause, seek and rate, corrects drift, and pauses on
-audio buffering/end/error. Audio stays local and is shared via tab audio.
-No local service or browser-native process integration is installed.
+## 包含什么
 
-Release ID: `2.3.11-caption-sync-20261029`.
+- Workers + SQLite Durable Objects：房间、权限、邀请、WebSocket 信令。
+- 主持人向少量观看者 P2P 扇出；打洞失败可经 TURN，SFU 保留热备/分发能力。
+- 先准备新媒体再切路、周期性 P2P 重试、冻结检测及恢复、重连宽限期。
+- 分辨率、帧率、码率、区间丢包、RTT、可用带宽及路由状态诊断。
+- 独立本地电影源标签页，减少窗口采集对 Windows 图形链路的依赖。
+- SRT/VTT Room Caption Library：主持人上传，所有人独立选择语言、大小、偏移。
+- 本地播放器暂停、跳转、倍速同步字幕时钟；外部网站仍需手动同步。
+- 本地 MKV 音频元数据检查、兼容性提示、外置 M4A 与画面联动。
+- Windows 音轨工具完整 C# 源码：DTS 等转 AAC，不改原片、不复制视频。
+- 合成媒体测试、公开发行扫描、CI、部署/自定义/排错/费用文档。
 
-Matroska audio track metadata is inspected locally with bounded reads. Risky
-codecs are flagged as potential compatibility issues; unknown inspection is not
-reported as missing audio. No movie is uploaded for inspection. There is no
-web-to-desktop service, local network access, or browser-initiated conversion.
-See [UPGRADE-2.3.9.md](UPGRADE-2.3.9.md).
+不包含：电影下载/存储、云浏览器、DRM 绕过、自动语音识别/翻译服务、
+字幕搜索站抓取器、全格式浏览器 MKV 解码、绝不掉线承诺或到额自动停机。
 
-See [UPGRADE-2.3.8.md](UPGRADE-2.3.8.md) for the new local-movie workflow and limitations.
-The player opens as a native link **before** selecting a file, eliminating the
-old delayed `window.open` flow. Pick a movie inside that tab, then return to the
-room and use **Share local player** → Chrome Tab → enable tab audio. Movie bytes
-stay local; the browser still encodes and transmits the shared tab through the
-existing P2P/SFU routes. This does not add server transcoding or change routing.
+## 从这里开始
 
-Play, pause, seek, buffering and playback rate update the room subtitle clock.
-Every endpoint independently selects uploaded SRT/VTT subtitles. The source tab
-never draws room subtitles into the shared image. Browser-exposed embedded text
-tracks are disabled; universal MKV/ASS/PGS support and removal of burned-in text
-are **not** included. Prefer MP4 with H.264/AAC or a browser-compatible WebM.
+1. 阅读 [部署教程](DEPLOY.md)，Fork/新建仓库并部署到你自己的 Cloudflare。
+2. 登录 `/host`，在“站点设置”修改站名、标语、默认主持人昵称等。
+   [品牌配置](public/site-config.js) 现在作为未设置/离线时的源码默认值。
+3. 打开 `https://你的站点/host` 登录，建房并发送私密邀请。
+4. 本地电影点 **Open local video**；在新标签页选原片，再点房间内
+   **Share local player**，选择该 Chrome 标签页并勾选音频。
+5. 若源标签页无声，先按 [音轨教程](docs/AUDIO.md) 生成 AAC M4A，
+   播放器加载原视频及 M4A；字幕仍以视频时间为基准。
 
-## Previous v2.3.7 join fix (retained)
+推荐桌面 Chrome/Edge 作为主持人；观看端能力依设备/浏览器和网络而异。
+`workers.dev` 可作为无需购买域名的入口，但并不保证所有地区可直接访问。
 
-**This is a new v2.3.7 built from v2.3.6, NOT the retired on-demand-SFU v2.3.7.**
-Historical notes: [UPGRADE-2.3.7.md](UPGRADE-2.3.7.md). Media encoding, P2P
-probes, the hot SFU backup, subtitles, server room state and permissions retain
-the v2.3.6 implementation. Only the room-control join lifecycle is changed.
+## 免费额度下能看多少
 
-- Single-flight admission, aborted ticket timeouts, fresh tickets on each retry.
-- At most three automatic attempts per join, with visible progress and Cancel.
-- 20-second handshake timeout and a separate 8-second room-welcome timeout.
-- Failed sockets are retired before retry; late messages cannot change state.
-- Early close/error fails immediately; permission failures do not retry blindly.
-- Reconnecting signalling does not stop an existing media track or broadcast.
-- A privacy-limited connection report is available both before and after joining.
-- Cannot bypass an operator/proxy/firewall which permanently blocks WebSockets.
+2026-10-29 核对官方文档：Realtime SFU 与 TURN **合计每月前 1,000 GB 出站免费**，
+超出为 $0.05/GB。Workers、Durable Objects、构建及其他服务另计。
+这意味着“小规模有机会 $0”，不是不限量零成本。[官方定价](https://developers.cloudflare.com/realtime/sfu/platform/pricing/)
 
-## Original product overview
+下表按**每部 2 小时、1 名远端观众、所有视频经 SFU**估计，只计算视频有效载荷：
 
-An invitation-only watch-together cinema designed for long-term deployment on Cloudflare.
+| 每月电影数 | 观影时长 | 3 Mbps | 5 Mbps |
+| --- | ---: | ---: | ---: |
+| 8 部（约每周 2 部） | 16 小时 | 21.6 GB | 36 GB |
+| 16 部 | 32 小时 | 43.2 GB | 72 GB |
+| 30 部（每天 1 部） | 60 小时 | 81 GB | 135 GB |
+| 60 部 | 120 小时 | 162 GB | 270 GB |
 
-The owner creates a private screening at `/host`, sends signed invitations, and shares a browser tab or screen. Small rooms prefer direct WebRTC while a parallel Cloudflare Realtime SFU path stays decoded and ready for make-before-break fallback. Movie files are not uploaded to the Worker or Durable Objects.
+2 名远端观众约乘 2，3 名约乘 3；主持人只发不收时不计为该表中的观众。
+音频、重传、冗余、额外 TURN 路径和并行热备会增加实际用量；显示 P2P 也未必
+没有 SFU 热备流量。不能仅按表格判断账单。[完整算法及预算边界](docs/COSTS.md)。
 
-## What changed in v2
+## 文档导航
 
-- Real server-side owner, host, and viewer permissions
-- Cryptographically signed, expiring and revocable invitations
-- One-time WebSocket tickets so invitation tokens do not stay in socket URLs
-- Hybrid media: direct P2P for up to three viewers plus a live Cloudflare SFU backup/fan-out path
-- No application-level viewer cap
-- Simulcast quality layers: Data saver, Balanced, High, and Auto
-- TURN credentials only for authenticated people who are already inside a room
-- Room locking, removal, guest-host invitations, and invitation revocation
-- Cross-country stream diagnostics: route, transport, bitrate, RTT, packet loss, jitter, resolution, and FPS
-- Server-side duplicate-connection protection and automatic reconnect
-- Chats are transient and are not persisted
-- Login and media endpoint rate limits plus strict browser security headers
+| 主题 | 文档 |
+| --- | --- |
+| 本地部署 / GitHub 自动部署 / 配置六项密钥 | [DEPLOY.md](DEPLOY.md) |
+| 标题、昵称、域名、工具品牌自定义 | [CUSTOMIZATION.md](docs/CUSTOMIZATION.md) |
+| P2P / TURN / SFU 和热备的真实行为 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| 免费额度、观影流量、超额风险 | [COSTS.md](docs/COSTS.md) |
+| 音轨转换、工具构建、无声排错 | [AUDIO.md](docs/AUDIO.md) |
+| 多语言字幕、暂停和中途开始 | [SUBTITLES.md](docs/SUBTITLES.md) |
+| 黑屏、卡顿、无法入房、构建卡初始化 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
+| 个人数据、P2P 地址与字幕存储 | [PRIVACY.md](docs/PRIVACY.md) |
+| 安全报告与部署安全 | [SECURITY.md](SECURITY.md) |
+| 测试范围及未验证项目 | [TESTING.md](TESTING.md) |
+| 贡献、提问、修改与重新发行 | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| 开源前检查、旧版本迁移与历史风险 | [PUBLISHING.md](docs/PUBLISHING.md) |
+| 版权 / 免责声明 / 第三方声明 | [COPYRIGHT.md](COPYRIGHT.md) · [DISCLAIMER.md](DISCLAIMER.md) · [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
 
-## Architecture
-
-```mermaid
-flowchart LR
-  O[Owner at /host] -->|creates signed invite| W[Worker + Durable Objects]
-  H[Authorized broadcaster] -->|hot backup / group upload| S[Cloudflare Realtime SFU]
-  H -->|small-room P2P fast path| V1
-  W -->|authorizes publish and subscribe| S
-  S --> V1[Invited viewer]
-  S --> V2[Invited viewer]
-  S --> VN[More invited viewers]
-  T[Cloudflare TURN] -. restricted-network fallback .-> H
-  T -. restricted-network fallback .-> V1
-```
-
-## Deploy
-
-Read [DEPLOY.md](DEPLOY.md). It covers the six required secrets, the safe upgrade path from v1, and the first real two-network test.
-
-After deployment:
-
-1. Open `https://your-domain.example/host`.
-2. Sign in with the owner password.
-3. Create a room and copy a viewer invitation.
-4. Open the invitation on a different device/network.
-5. Start broadcasting and choose a Chrome or Edge tab with **Share tab audio** enabled.
-
-For a local file, MP4/H.264/AAC is the most browser-friendly combination. The file stays on the broadcaster's computer. Streaming services with DRM may intentionally show a black screen; this project does not bypass DRM.
-
-## Development
+## 源码结构
 
 ```text
-npm install
-npm run check
-npm run dev
+public/                   浏览器页面、播放器、媒体路由、字幕、品牌配置
+src/                      Worker API、Durable Objects、签名与云媒体 API
+test/                     Node 测试（包括原有连接/路由/字幕回归）
+tools/audio-prep/         Windows 音轨工具源码、构建脚本与教程
+scripts/                  公开发行扫描、本地浏览器测试及安全打包
+examples/subtitles/       项目自写的英/中/俄极短示例，不是影片字幕
+docs/                     自部署、自定义、成本、架构与排错
+.github/workflows/        仅检查，不带自动发布或生产部署
 ```
 
-No permanent credential belongs in the repository. Put every secret in Cloudflare **Variables and Secrets** as a Secret.
+## 开发与验证
 
-## Operational notes
+需要 Node.js 22+（建议当前受支持 LTS）。
 
-- The root page has no public room list. Without a valid invitation it is a closed door.
-- Room and invitation lifetime is limited to seven days; create a new room for a later screening.
-- Locking a room blocks new devices while preserving reconnect access for viewers already admitted with that invitation.
-- A guest-host link grants real broadcasting permission. Treat it as sensitive and revoke it after use.
-- “Cloudflare TURN fallback is ready” means TURN credentials are available, not that the current stream is consuming TURN bandwidth.
-- The Network panel reports the actual selected WebRTC path and live transport statistics.
+```sh
+npm ci
+npm run check
+npm run check:public
+npx wrangler deploy --dry-run
+```
 
-See [SECURITY.md](SECURITY.md) for the trust model and [TESTING.md](TESTING.md) for the pre-release checklist.
+真实本地浏览器集成测试为可选项：`npx playwright install chromium` 后
+`npm run test:browser`。只生成合成媒体、访问 localhost，不用真实影片/云凭据。
+音轨工具在 Windows 上按 `tools/audio-prep/README.md` 自行构建。
 
-## v2.3.6 Adaptive P2P return probes
+原理、测试通过与真实跨国长期可用是不同的证据。参见 TESTING.md，
+不要将本仓库描述为已证明支持任意人数、任意国家或任意网络的生产 SLA。
 
-- Falling back to SFU no longer locks a Viewer there for a fixed ten minutes.
-  The Viewer retries P2P after 60 seconds, then three minutes, then ten minutes
-  after repeated failed probes. If the control WebSocket is temporarily down,
-  the Viewer waits and asks again after it reconnects instead of losing the
-  retry forever.
-- Every retry is make-before-break: the SFU video remains visible and audible
-  while a hidden P2P candidate connects and is measured for six seconds.
-- The candidate must decode fresh frames, maintain at least 18 fps, retain a
-  useful resolution relative to the SFU picture, and either stay at or below
-  3% packet loss or materially outperform a bad SFU path. Only then can it
-  replace SFU.
-- A failed P2P probe is discarded without touching the visible SFU connection.
-  A successful probe resets the retry backoff.
-- Sustained P2P loss no longer causes a blind switch. The Viewer measures P2P
-  and SFU over the same interval and changes route only when SFU is demonstrably
-  healthier. A paused/static movie is treated as an inconclusive sample, not a
-  failed network path.
-- P2P is not retired until SFU has decoded and displayed a frame. Probe results
-  are generation-checked so an old candidate cannot override a new movie,
-  connection, or room size; rooms above three Viewers cancel outstanding P2P
-  probes and use SFU fan-out.
-- Host diagnostics now distinguish the Host's always-on SFU backup upload from
-  each Viewer's actual `P2P`, `P2P/TURN`, `SFU`, or `SFU/TURN` route.
+## 版权及使用责任
 
-This removes the misleading assumption that the Host's SFU publisher status is
-the Viewer's active route and lets cross-border/VPN paths recover back to P2P
-when their network conditions improve.
-
-## v2.3.5 Control-loop and lossy-P2P recovery
-
-- Browser tabs now keep independent participant identities. Reloads and network
-  hand-offs still preserve one tab's identity, but a second tab can no longer
-  start an endless cycle in which both sockets repeatedly replace each other.
-- If a newer tab deliberately replaces an older one, the older page stops
-  reconnecting and clearly says that another tab has taken control.
-- Repeated control reconnections are condensed into one counter in room chat,
-  rather than appending an unlimited list of `Connection restored` messages.
-- A Viewer on direct P2P no longer has to wait for the picture to freeze before
-  recovery begins. Two consecutive five-second samples at 8% packet loss or
-  more trigger verification of the decoded hot SFU backup, followed by a
-  make-before-break switch when that backup is healthy.
-- The capture-source message is styled as a neutral operating tip unless live
-  sender statistics actually detect browser background throttling.
-
-The sender cannot erase packet loss on a remote VPN or Wi-Fi path. This release
-instead stops treating a high-loss P2P connection as healthy and moves the
-Viewer to a verified alternative path before the stream becomes unusable.
-
-## v2.3.4 Frozen-video recovery
-
-- Viewer playback is no longer considered healthy merely because WebRTC still
-  says `connected`. A watchdog checks inbound decoded frames, actual frames
-  presented by the visible video element, and audio progress every 2.5 seconds.
-- If audio continues while video produces no new frame for 7.5 seconds, the
-  route is treated as frozen. A complete media silence uses a conservative
-  15-second threshold so a deliberately paused or static source does not flap.
-- A frozen P2P route first verifies the hot SFU backup. If necessary it creates
-  a fresh SFU subscription, waits for its first frame, and only then switches.
-- A frozen SFU route is replaced make-before-break. The old picture remains on
-  screen until the new subscription has decoded a frame, so recovery does not
-  require the Viewer to refresh the page.
-- If the visible video element was locally paused by browser controls or an
-  autoplay interruption, the watchdog resumes it automatically.
-
-This is the primary repair for a Viewer whose picture freezes while the room
-and WebRTC connection still appear online. v2.3.3's reconnect grace remains as
-a secondary protection when a Viewer refreshes or changes networks.
-
-## v2.3.3 Control reconnect stabilization
-
-- A temporary room WebSocket outage no longer emits an immediate leave event.
-  The same logical participant remains present for a 45-second reconnect grace
-  period while an existing P2P or SFU media route is preserved.
-- A returning browser is announced as reconnected, not as a newly joined
-  device. The Host therefore does not close and rebuild a healthy P2P route.
-- The participant list shows `reconnecting` during the grace period. A real
-  departure is announced only after the grace expires, or immediately when the
-  user explicitly chooses Leave, is removed, or the screening ends.
-- Repeated WebSocket welcomes no longer fill the room chat with duplicate
-  `You entered as ...` messages.
-
-This specifically fixes the failure mode where a VPN or cross-border control
-connection briefly flapped and the application itself amplified it into a
-visible movie pause. It does not claim that an underlying media-path outage can
-never occur; v2.3.2's hot SFU/P2P fallback still handles that separate layer.
-
-## v2.3.2 Seamless route switching
-
-- Viewers keep separate P2P and SFU video pipelines. The hidden backup keeps
-  playing muted instead of being destroyed when the direct route wins.
-- A route is not displayed until its first video frame has decoded. Only then
-  does the UI atomically mute the old route and reveal the new one.
-- The Host keeps SFU sender tracks live in small rooms. This uses more bandwidth
-  than cold standby, but removes the black gap while SFU publication resumes.
-- A failed P2P path is pinned to SFU for ten minutes. The endpoints exchange a
-  bounded `defer` signal instead of flapping between paths every few seconds.
-- Transient ICE `disconnected` state gets a twelve-second grace period. SFU
-  replacement subscriptions also retire the old connection only after the
-  replacement has decoded a frame.
-- Stream Health shows the route-switch reason and total switch count.
-
-No new Cloudflare binding or secret is required. Because SFU is a true hot
-backup, Realtime traffic can continue while a Viewer watches over P2P. This is
-the intentional reliability tradeoff in v2.3.2.
-
-## v2.3.1 Caption sizing and playback clock
-
-- Captions default to a smaller cinema-safe size. Each endpoint can independently
-  choose Smaller, Standard, or Larger without changing anyone else's view.
-- Caption timing now uses a room clock controlled by the Host. Pausing or
-  resuming that clock affects every endpoint while each viewer retains their own
-  language and offset.
-- **Open local video** launches the built-in controlled player. Supported local
-  MP4/WebM playback, pause, and seeking update the room subtitle clock
-  automatically.
-- A third-party cross-origin tab such as Tencent Video cannot expose its private
-  playback state to this site. For those sources, the Host uses the one-click
-  **Pause subtitles / Resume subtitles** control.
-
-## v2.3.0 Room Caption Library and capture-source guidance
-
-- A Host can upload up to 12 `.srt` or `.vtt` tracks to the current room. The
-  tracks are stored with that room in Durable Object storage and are removed
-  when the room is permanently deleted.
-- Every invited endpoint receives the same track list but independently chooses
-  its language, offset, or **Off**. Selecting Russian on one device does not
-  change English on another device.
-- Only authorized Hosts can add or remove tracks. A valid room invitation is
-  required to download a track; subtitle files are not exposed on a public URL.
-- The Host UI now always explains Chrome's capture-source throttling workaround:
-  move the movie tab into its own browser window and keep that window active.
-  When the captured source reports 24/30 fps but WebRTC stays near 15 fps for
-  several samples without network loss, the warning is highlighted and a toast
-  is shown.
-
-Room captions use the live screen-share clock plus each endpoint's manual
-offset. A browser cannot read the private playback clock of a Tencent Video or
-other cross-origin player, so pausing/seeking that external player may require
-offset correction. Exact pause/seek synchronization requires a future Host
-Companion or an integrated local player that owns the movie clock.
-
-## v2.2.3 quality-first direct media and room cleanup
-
-- Direct P2P now requests a single full-resolution encoding and uses
-  `maintain-resolution`, so WebRTC bandwidth ramp-up should reduce motion or
-  compression before shrinking a film to 270p.
-- Stream diagnostics distinguish the captured source from the encoded output
-  and show the browser's estimated available bandwidth.
-- The owner dashboard can permanently delete any room. Deleting an active room
-  disconnects its participants and invalidates its invitations.
-- Ended/expired room history is pruned after seven days, and newly-created room
-  Durable Object state is automatically purged after the same retention window.
-
-## v2.2.2 direct-first media and endpoint subtitles
-
-> Historical note: v2.3.2 supersedes the cold-SFU behavior below. SFU tracks are
-> now kept live so fallback is frame-ready before the visible route changes.
-
-- Up to three viewers use separate direct P2P fast paths. A fourth viewer
-  switches the room to SFU fan-out so Host upload does not grow without bound.
-- Once every small-room viewer has held a direct connection for three seconds,
-  the Host pauses its parallel SFU sender tracks. This removes duplicate
-  P2P-plus-simulcast encoding/upload that could make Chrome's congestion
-  controller reduce a healthy direct stream to 480x270. The SFU PeerConnection
-  remains allocated as a cold standby and resumes before a direct fallback or
-  larger-room transition.
-- Active SFU mode now publishes only two cinema-grade layers: 1080p with a
-  720p fallback, or 720p with a 540p fallback. The previous 180p/270p emergency
-  layer was removed because maintaining a connection below the product's
-  watchable quality floor is not a useful movie experience.
-- The control WebSocket now sends a heartbeat. Losing that control connection
-  briefly no longer stops screen capture or immediately tears down healthy
-  media; the server grants the broadcaster a 30-second reconnect window.
-- Failed or disconnected P2P routes fall back to the SFU and retry direct ICE
-  with bounded backoff. Returning online also triggers a direct-route retry.
-- Every endpoint can load one or more local `.srt`/`.vtt` files, select its own
-  language track, and adjust its own subtitle offset. v2.3.0 supersedes this
-  local-only workflow with the authenticated Room Caption Library.
-
-Endpoint subtitles are intentionally separate from the video. For a captured
-Tencent/streaming tab the cinema cannot read the third-party player's pause or
-seek position, so use the ±1 second offset controls and avoid seeking after
-alignment. A later caption service can publish timestamped speech-to-text and
-translations over the room control channel without changing the media route.
-
-## v2.1.1 small-room routing and reconnection
-
-- Up to three viewers can now receive separate direct WebRTC connections from
-  the Host. Adding a second viewer no longer forces the whole room onto the
-  Cloudflare SFU.
-- A fourth viewer switches the room to SFU fan-out so Host upload and encoding
-  do not continue growing without a bound.
-- Each admitted browser now keeps a stable logical participant ID. Replacing a
-  Wi-Fi connection with mobile data still requires ICE/WebSocket reconnection,
-  but the replacement session is no longer presented as a brand-new device.
-- The local-video picker now allows MKV files. Playback still depends on the
-  codecs inside the container; when the browser cannot decode a file, remux it
-  to browser-compatible MP4 or share a VLC/mpv window.
-- P2P is not limited to a LAN. ICE tries direct internet candidates first and
-  can use the authenticated TURN service when NAT or firewall rules prevent a
-  direct path.
-
-Small-room direct fan-out trades server routing for Host resources. At the
-default 2.2 Mbps profile, three viewers may require roughly 6.6 Mbps plus
-protocol overhead of sustained Host upload. Use the SFU for larger rooms.
-
-## v2.1.0 hybrid media routing
-
-- With exactly one viewer, the cinema now establishes a direct WebRTC P2P fast
-  path while keeping the Cloudflare SFU stream available as a fallback.
-- If direct ICE succeeds, the viewer automatically leaves the SFU download and
-  the Network panel changes to **Direct P2P**.
-- If P2P fails, the existing SFU playback continues without interrupting the
-  screening. TURN candidates remain available for restrictive NATs and
-  firewalls.
-- When a second viewer enters, direct mode closes and every viewer uses the SFU
-  so Host upload does not grow once per audience member.
-- Selected-candidate detection now also uses WebRTC transport stats, which fixes
-  `UNKNOWN` route/transport reporting in WebKit-based iPhone browsers.
-
-This mirrors the practical two-person/group split used by mature watch-party
-products: direct media for two devices, relayed media for groups. The website,
-authentication, room state and signaling still run on Cloudflare in both modes.
-
-## v2.0.3 mobile playback update
-
-- Best quality and Balanced are adaptive preferences. They can step down when a
-  phone or network cannot sustain the preferred simulcast layer.
-- Default 720p publishing is capped at 2.2 Mbps; the optional 1080p profile is
-  capped at 3.5 Mbps to avoid turning moderate loss into severe frame stalls.
-- Data saver remains an explicit low-bandwidth choice.
-- Packet loss and frame drops are reported per five-second interval instead of
-  as misleading lifetime totals.
-- Host diagnostics consistently show the largest active simulcast layer rather
-  than whichever RTP report the browser returned last.
-- TURN credential generation now sends the request body documented by
-  Cloudflare (`ttl` only), fixing the observed HTTP 400 warning.
-
-For mobile viewers, leave Quality on **Auto (recommended)**. Best quality means
-"prefer the best available layer," not "ignore congestion and force 1080p."
-
-## License
-
-This is proprietary software. All rights reserved. See [COPYRIGHT.md](https://github.com/jujizh/jujizh-jiahao-private-cinema-cloudflare/blob/main/COPYRIGHT.md). No open-source license is granted.
+Copyright 2026 Private Cinema contributors. Apache-2.0。
+软件许可不授予影片、字幕、商标或所有编解码器专利的权利；
+不允许据此声称“作者保证任何用途合法”。使用前阅读 DISCLAIMER.md。
